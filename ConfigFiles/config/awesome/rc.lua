@@ -28,7 +28,7 @@ beautiful.init(gfs.get_configuration_dir() .. "theme/" .. theme .."/theme.lua")
 
 -- 🌊 Default Applications
 terminal = "kitty"
-editor = terminal .. " -e " .. os.getenv("EDITOR")
+editor = terminal .. " -e " .. (os.getenv("EDITOR") or "nano")
 vscode = "code"
 browser = "firefox"
 launcher = "rofi -show drun -theme " .. gfs.get_configuration_dir() .. "theme/rofi.rasi"
