@@ -639,7 +639,10 @@ preguntar_contrasena() { # <variable> <etiqueta>
       warn "Las contrasenas no coinciden, intenta de nuevo."
       continue
     fi
-    if [[ "$p1" == *"$(printf '\n')"* ]]; then
+    # Ojo: el salto hay que escribirlo $'\n'. Con $(printf '\n') la
+    # sustitucion de comando se come el salto, el patron queda "*" y el
+    # aviso salta con cualquier contrasena.
+    if [[ "$p1" == *$'\n'* || "$p1" == *$'\r'* ]]; then
       warn "La contrasena no puede contener saltos de linea."
       continue
     fi
