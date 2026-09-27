@@ -1,82 +1,105 @@
 #!/usr/bin/env bash
 #
-#   Instalacion_Predatox - Instalador automatizado y personalizable de Arch Linux
-#   ═══════════════════════════════════════════════════════════════════════════
-#
-#   Integra en un solo script la informacion de:
-#     - ArchInstall.sh          (fase ISO: particionado + pacstrap)
-#     - ArchConfig.sh           (fase chroot: configuracion del sistema)
-#     - Instalacion de Arch Personalizado.txt   (guia completa)
-#     - Guia de Instalacion.txt                 (notas y personalizacion)
+#   Instalacion_Predatox · Instalador automatizado y personalizable de Arch Linux
+#   ===========================================================================
 #
 #   EJECUCION DESDE EL ISO OFICIAL DE ARCH LINUX (primer booteo):
 #     Estando en la consola del ISO y con internet:
 #       loadkeys es
-#       curl -fsSL -o Instalacion_Predatox https://raw.githubusercontent.com/SrSancen/ArchInstall/main/Instalacion_Predatox
+#       curl -fsSL -o Instalacion_Predatox \
+#         https://raw.githubusercontent.com/SrSancen/Predatox/main/Instalacion_Predatox
 #       chmod +x Instalacion_Predatox
 #       ./Instalacion_Predatox
-#     O bien, directo de internet a la consola del ISO:
-#       bash <(curl -fsSL https://raw.githubusercontent.com/SrSancen/ArchInstall/main/Instalacion_Predatox)
 #
-#   Tambien puedes llevar una configuracion precargada (opcional):
+#     O bien, directo de internet a la consola del ISO:
+#       bash <(curl -fsSL https://raw.githubusercontent.com/SrSancen/Predatox/main/Instalacion_Predatox)
+#
+#     Con una configuracion precargada (opcional, no hace preguntas):
 #       ./Instalacion_Predatox --config /ruta/predatox.conf
 #
-#   Que hace:
-#     1) Pide los datos necesarios (usuario, hostname, contrasenas, disco,
-#        tamaños de particion, zona horaria, teclado, wallpapers, etc.).
-#     2) Particiona, formatea y monta el disco (soporta UEFI/GPT y BIOS/MBR,
-#        discos SATA (sda) y NVMe (nvme0n1)).
-#     3) Instala el sistema base con pacstrap y genera el fstab.
-#     4) Entra en chroot y configura todo automaticamente:
-#          - locale, teclado, zona horaria, hostname, hosts
-#          - usuarios (root y usuario personal) con permisos sudo
-#          - pacman.conf (Color, ParallelDownloads, ILoveCandy)
-#          - GRUB (BIOS y UEFI)
-#          - Servicios (NetworkManager, sshd, wpa_supplicant, lightdm, etc.)
-#          - IP fija opcional con nmcli
-#          - Paru (AUR), repositorios BlackArch (opcionales)
-#          - Entorno grafico AwesomeWM personalizado (opcional)
-#          - Herramientas de pentesting (opcionales)
-#     5) Finaliza y reinicia el equipo.
+#   QUE PIDE (unicos 4 datos, el resto se detecta solo):
+#     1) Nombre del usuario personal   (acepta mayusculas y minusculas)
+#     2) Nombre del equipo / hostname  (acepta mayusculas y minusculas)
+#     3) Contrasena de root
+#     4) Contrasena del usuario
+#     No pide confirmacion de formateo ni de reinicio: continua solo.
+#
+#   QUE HACE, POR ETAPAS:
+#     FASE ISO (este equipo, sin instalar):
+#       ETAPA 1/5  Preparacion: teclado, zona horaria, deteccion de disco
+#       ETAPA 2/5  Particionado del disco (soporta UEFI/GPT y BIOS/MBR, sda/nvme)
+#       ETAPA 3/5  Formateo y montaje (sin pedir confirmacion)
+#       ETAPA 4/5  Sistema base con pacstrap + fstab
+#       ETAPA 5/5  Copia del script y la config, entrada al chroot
+#     FASE CHROOT (dentro de /mnt):
+#       ETAPA  1/10  Configuracion del sistema (locale, teclado, hora, host, red)
+#       ETAPA  2/10  Usuarios, contrasenas y sudo
+#       ETAPA  3/10  pacman.conf y actualizacion del sistema
+#       ETAPA  4/10  Paru (AUR) y repositorios BlackArch
+#       ETAPA  5/10  Entorno grafico (Xorg, LightDM, AwesomeWM)
+#       ETAPA  6/10  Personalizacion del escritorio (repo SrSancen/Predatox)
+#       ETAPA  7/10  Entorno de root (zsh, powerlevel10k, fzf, nvim)
+#       ETAPA  8/10  GRUB y servicios
+#       ETAPA  9/10  Herramientas de pentesting (opcional)
+#       ETAPA 10/10  Cierre y reinicio
 #
 #   NOTAS:
-#     - neofetch fue retirado de los repositorios oficiales, se instala
-#       fastfetch (su sucesor oficial).
-#     - Se usa pipewire (estandar actual de Arch) en lugar de pulseaudio.
-#     - En chroot se copia a /root/Instalacion_Predatox y se invoca con el
-#       argumento "chroot" (no ejecutar a mano).
-#     - Los archivos de personalizacion (wallpapers, tema GRUB, config de
-#       awesome, fuentes) se descargan por tarball desde el repo base
-#       (yioshisancen/AwesomeWM). No se clona el repo via git; solo se
-#       bajan los archivos necesarios, y quedan disponibles tambien junto
-#       a este script en el repositorio de usuario (SrSancen/ArchInstall).
+#     - neofetch fue retirado de los repos oficiales: se instala fastfetch.
+#     - Se usa pipewire (estandar actual) en lugar de pulseaudio.
+#     - Los archivos de personalizacion se descargan por tarball desde
+#       SrSancen/Predatox (antes yioshisancen/AwesomeWM). Si el tarball falla
+#       se reintenta con las ramas master/main, luego con git clone y, como
+#       ultimo recurso, archivo por archivo vía raw.githubusercontent.com.
+#     - Las contrasenas se guardan como hash SHA-512 y se aplican con
+#       "chpasswd -e", por lo que admiten cualquier caracter especial
+#       ($, #, \, :, %, comillas, espacios, etc.) sin alterarse.
 #     - El tema de GRUB solo se aplica si su fondo queda valido; si algo
 #       falla se usa GRUB estandar para evitar pantalla negra al reiniciar.
 #
-#   RECURSOS / REFERENCIAS (de la documentacion original):
-#     - Documentacion Arch Linux : https://wiki.archlinux.org/title/Installation_guide
-#     - Documentacion AwesomeWM  : https://awesomewm.org/doc/api/documentation/07-my-first-awesome.md.html
-#     - Entorno Awesome de rxyhn : https://github.com/rxyhn/yoru/tree/a2faa2ffad7c439ed7abe9a3f43e54e9b3bfc762
-#     - Sistema de login LightDM : https://wiki.archlinux.org/title/LightDM
-#     - Powerlevel10k            : https://github.com/romkatv/powerlevel10k
-#     - Fzf                      : https://github.com/junegunn/fzf
-#     - NvChad (Neovim)          : https://github.com/NvChad/NvChad
-#     - Tema Style HackTheBox    : https://github.com/hekatonkheirex/youtube
+#   REFERENCIAS:
+#     - Arch Linux   : https://wiki.archlinux.org/title/Installation_guide
+#     - AwesomeWM    : https://awesomewm.org/doc/api/documentation/07-my-first-awesome.md.html
+#     - LightDM      : https://wiki.archlinux.org/title/LightDM
+#     - Powerlevel10k: https://github.com/romkatv/powerlevel10k
+#     - Fzf          : https://github.com/junegunn/fzf
+#     - NvChad       : https://github.com/NvChad/NvChad
+#     - slick-greeter: https://github.com/linuxmint/slick-greeter
 
 set -uo pipefail
 
-# ──────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 #  CONSTANTES
-# ──────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
 SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "$0")"
-CONFIG_TARGET="/mnt/etc/predatox.conf"     # config que lee la fase chroot
+
+# Repositorio oficial del script y de los archivos de personalizacion.
+REPO_USUARIO="SrSancen"
+REPO_NOMBRE="Predatox"
+REPO_RAMA_POR_DEFECTO="main"
+REPO_RAMAS="main master"
+RAW_BASE="https://raw.githubusercontent.com/${REPO_USUARIO}/${REPO_NOMBRE}"
+RAW_SCRIPT="${RAW_BASE}/${REPO_RAMA_POR_DEFECTO}/Instalacion_Predatox"
+# Repositorio anterior, usado solo como respaldo si Predatox no responde.
+REPO_ALT_USUARIO="yioshisancen"
+REPO_ALT_NOMBRE="AwesomeWM"
+
+# Destinos dentro del sistema que se esta instalando.
+CONFIG_TARGET="/mnt/etc/predatox.conf"
 SCRIPT_TARGET="/mnt/root/Instalacion_Predatox"
-RAW_SCRIPT="https://raw.githubusercontent.com/SrSancen/ArchInstall/main/Instalacion_Predatox"
-# Repositorio base con los archivos de personalizacion (ConfigFiles).
-# Tambien es URL de descarga oficial por tarball (evita depender de git).
-AWESOME_USER="yioshisancen"
-AWESOME_BRANCH="main"
-AWESOME_DL="https://codeload.github.com/${AWESOME_USER}/AwesomeWM/tar.gz/refs/heads/${AWESOME_BRANCH}"
+DESTINO_REPO=""                              # se define en la fase chroot
+LOG_FILE="/tmp/instalacion_predatox.log"
+
+# Comportamiento (todo configurable desde el archivo de configuracion).
+AUTO_REBOOT="${AUTO_REBOOT:-S}"             # S = reinicia al terminar
+BOOT_SIZE="${BOOT_SIZE:-1G}"                # particion de arranque (/boot o FAT)
+SWAP_SIZE="${SWAP_SIZE:-5G}"                # particion de intercambio
+FREE_SIZE="${FREE_SIZE:-0G}"                # espacio sin particionar (0 = usar todo)
+INSTALL_GUI="${INSTALL_GUI:-S}"             # entorno grafico AwesomeWM
+INSTALL_PARU="${INSTALL_PARU:-S}"           # AUR helper
+INSTALL_BLACKARCH="${INSTALL_BLACKARCH:-S}" # repos BlackArch
+INSTALL_PENTEST="${INSTALL_PENTEST:-N}"     # herramientas pentest
+STATIC_IP="${STATIC_IP:-N}"
+XKBLAYOUT="${XKBLAYOUT:-latam}"             # disposicion del teclado en el escritorio
 
 # Colores
 C_RESET=$'\033[0m'
@@ -86,158 +109,568 @@ C_AMAR=$'\033[0;33m'
 C_AZUL=$'\033[0;34m'
 C_MAG=$'\033[0;35m'
 C_CIA=$'\033[0;36m'
+C_GRIS=$'\033[0;90m'
 C_NEG=$'\033[1;30m'
 
-# ──────────────────────────────────────────────────────────────────────────
-#  FUNCIONES DE INTERFAZ
-# ──────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+#  INTERFAZ: mensajes, registro y arte ASCII
+# ────────────────────────────────────────────────────────────────────────────
+registrar() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*" >> "$LOG_FILE" 2>/dev/null || true; }
+
+ok()    { echo -e "${C_VERDE}[OK]${C_RESET} $*";    registrar "OK    $*"; }
+warn()  { echo -e "${C_AMAR}[AVISO]${C_RESET} $*"; registrar "AVISO $*"; }
+fail()  { echo -e "${C_ROJO}[FALLO]${C_RESET} $*"; registrar "FALLO $*"; }
+info()  { echo -e "${C_CIA}==>${C_RESET} $*";      registrar "INFO  $*"; }
+detalle() { echo -e "       ${C_GRIS}$*${C_RESET}"; }
+die()   { fail "$*"; echo; exit 1; }
+
+separador() { echo -e "${C_CIA}$(repeticion '─' 79)"${C_RESET}; }
+
+repeticion() { # <caracter> <cantidad>
+  local c="$1" n="$2" s=""
+  while (( n-- > 0 )); do s+="$c"; done
+  printf '%s' "$s"
+}
+
+ancho_terminal() {
+  local w="${COLUMNS:-0}"
+  if (( w <= 0 )); then w="$(tput cols 2>/dev/null || echo 80)"; fi
+  [[ "$w" =~ ^[0-9]+$ ]] || w=80
+  (( w < 40 )) && w=80
+  printf '%s' "$w"
+}
+
+# Ancho de un texto en columnas. Los rotulos llevan caracteres de dibujo
+# (── ·) que ocupan una columna pero varios bytes, asi que en una consola sin
+# locale UTF-8 hay que contar en un subshell con el locale puesto.
+columnas() {
+  local s="$1"
+  ( export LC_ALL=C.UTF-8; printf '%s' "${#s}" ) 2>/dev/null || printf '%s' "${#s}"
+}
+
+# Ancho maximo de las lineas de un bloque de arte (separadas por \n)
+ancho_arte() {
+  local arte="$1" linea max=0
+  while IFS= read -r linea; do
+    (( ${#linea} > max )) && max=${#linea}
+  done <<< "$arte"
+  printf '%s' "$max"
+}
+
+# Imprime el arte solo si cabe en el terminal; si no, lo omite (la cabecera
+# de etapa ya indica el nombre). Evita que el arte se parta a la mitad.
+imprimir_arte() {
+  local arte="$1" w
+  [[ -n "$arte" ]] || return 1
+  w="$(ancho_terminal)"
+  if (( $(ancho_arte "$arte") <= w )); then
+    printf '%s\n' "$arte"
+    return 0
+  fi
+  return 1
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  ARTE COMPACTO DE ETAPAS (3 lineas, 5 columnas por letra)
+#  Es la version corta de los rotulos ASCII de
+#  "Instalacion de Arch Personalizado.txt": siempre cabe en un terminal de
+#  80 columnas, que es como se ve la consola del ISO de Arch.
+# ────────────────────────────────────────────────────────────────────────────
+FUENTE_ASCII='A; __ ;/  \;\__/
+B; __ ;|  );|__/
+C; __ ;/   ;\___
+D; __ ;|  \;|__/
+E;____;|___;|___
+F;____;|__ ;|___
+G; __ ;/  |;\___
+H;_  _;|__|;|  |
+I;___ ; _| ;|_| 
+J; ___;   |; __/
+K;_  _;|__/;|  \
+L;_   ;|   ;|___
+M;_  _;|\/|;| V|
+N;_  _;| \ ;|  \
+O; __ ;/  \;\__/
+P; __ ;|__/;|   
+Q; __ ;/  \;\__X
+R; __ ;|__/;|  \
+S; __ ;/___;\___
+T;____; _| ; _| 
+U;_  _;|  |;\__/
+V;_  _;\  /; \/ 
+W;|\/|;| | ;|_| 
+X;\ / ; X  ;/ \ 
+Y;_  _; \_/;  V 
+Z;____;   /;/___'
+
+# arte_titulo <TEXTO>  ->  dibuja el texto en el arte compacto (3 lineas por
+# trozo). Los rotulos largos se parten en varias filas para que el arte nunca
+# se corte. Las tildes y la "ñ" se cambian por su letra base y los signos que
+# no tienen glifo se descartan.
+arte_titulo() {
+  local txt="${1^^}" c letra a b d por_letra
+  local linea palabra primera=1
+  local -a palabras=() trozos=()
+  local r1="" r2="" r3="" l1="" l2="" l3="" j
+  txt="${txt//Á/A}"; txt="${txt//É/E}"; txt="${txt//Í/I}"; txt="${txt//Ó/O}"
+  txt="${txt//Ú/U}"; txt="${txt//Ü/U}"; txt="${txt//Ñ/N}"
+  txt="$(printf '%s' "$txt" | tr -cd 'A-Z ' | sed -e 's/ \{2,\}/ /g' -e 's/^ //' -e 's/ $//')"
+  [[ -n "$txt" ]] || return 1
+
+  # 1) Reparte el texto en trozos que caben en el terminal, sin partir
+  #    palabras por la mitad salvo que no haya otra forma.
+  por_letra=$(( ($(ancho_terminal) - 1) / 5 ))    # 5 columnas por letra - margen
+  (( por_letra > 20 )) && por_letra=20
+  (( por_letra < 4 ))  && por_letra=4
+  read -ra palabras <<< "$txt"
+  for palabra in "${palabras[@]}"; do
+    if (( primera )); then
+      linea="$palabra"; primera=0
+    elif (( ${#linea} + 1 + ${#palabra} <= por_letra )); then
+      linea+=" $palabra"
+    else
+      trozos+=("$linea"); linea="$palabra"
+    fi
+    while (( ${#linea} > por_letra )); do
+      trozos+=("${linea:0:por_letra}"); linea="${linea:por_letra}"
+    done
+  done
+  [[ -n "$linea" ]] && trozos+=("$linea")
+
+  # 2) Dibuja cada trozo en sus tres lineas.
+  for j in "${trozos[@]}"; do
+    l1=""; l2=""; l3=""
+    local k
+    for (( k = 0; k < ${#j}; k++ )); do
+      c="${j:k:1}"
+      l1+="     "; l2+="     "; l3+="     "        # celda de 4 col. + separador
+      [[ "$c" == " " || ! "$c" =~ ^[A-Z]$ ]] && continue
+      while IFS=';' read -r letra a b d; do
+        d="${d%$'\n'}"                     # el ultimo campo se come el salto
+        if [[ "$letra" == "$c" ]]; then
+          l1="${l1:0:${#l1}-5}${a} "       # sustituye la celda en blanco
+          l2="${l2:0:${#l2}-5}${b} "
+          l3="${l3:0:${#l3}-5}${d} "
+          break
+        fi
+      done <<< "$FUENTE_ASCII"
+    done
+    r1+="$l1"$'\n'; r2+="$l2"$'\n'; r3+="$l3"$'\n'
+  done
+  printf '%s%s%s' "$r1" "$r2" "$r3"
+}
+
+# Recuadro de etapa: siempre ASCII para que el ancho nunca se descuadre.
+recuadro() { # <titulo>
+  local t="$1" ancho=77 pad
+  pad=$(( ancho - ${#t} - 1 ))
+  (( pad < 1 )) && pad=1
+  echo -e "${C_CIA}╔$(repeticion '═' "$ancho")╗${C_RESET}"
+  echo -e "${C_CIA}║${C_RESET} ${C_VERDE}${t}${C_RESET}$(printf '%*s' "$pad" '')${C_CIA}║${C_RESET}"
+  echo -e "${C_CIA}╚$(repeticion '═' "$ancho")╝${C_RESET}"
+}
+
 banner() {
   cat <<'EOF'
 
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║     ___                    __             __     _                            ║
-║    /   |   _____  _____   / /_           / /    (_)   ____   __  __   _  __   ║
-║   / /| |  / ___/ / ___/  / __ \         / /    / /   / __ \ / / / /  | |/_/   ║
-║  / ___ | / /    / /__   / / / /        / /___ / /   / / / // /_/ /  _>  <     ║
-║ /_/  |_|/_/     \___/  /_/ /_/        /_____//_/   /_/ /_/ \__,_/  /_/|_|     ║
-║                                                                               ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
-     Instalador automatizado y personalizable de Arch Linux
+ ██████╗ ██████╗  ██████╗ ███████╗██████╗  ████████╗ ██████╗ ██╗  ██
+ ██╔══██╗██╔══██╗██╔════╝ ██╔════╝██╔══██╗╚══██╔══╝██╔═══██╗██║  ██
+ ██████╔╝██████╔╝██║  ███╗█████╗  ██████╔╝   ██║   ██║   ██║███████║
+ ██╔═══╝ ██╔══██╗██║   ██║██╔══╝  ██╔══██╗   ██║   ██║   ██║██╔══██║
+ ██║     ██║  ██║╚██████╔╝███████╗██║  ██║   ██║   ╚██████╔╝██║  ██║
+ ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚═╝  ╚═╝
+          ARCH LINUX PERSONALIZADO · INSTALADOR AUTOMATIZADO
 EOF
 }
 
-ok()  { echo -e "${C_VERDE}[OK]${C_RESET} $*"; }
-warn(){ echo -e "${C_AMAR}[AVISO]${C_RESET} $*"; }
-fail(){ echo -e "${C_ROJO}[ERROR]${C_RESET} $*"; }
-die() { fail "$*"; exit 1; }
-info(){ echo -e "${C_CIA}==>${C_RESET} $*"; }
-ht_sep(){ echo "═══════════════════════════════════════════════════════════════════════════════"; }
+# ── Arte de las etapas (tomado de "Instalacion de Arch Personalizado.txt") ──
+arte_primer() { cat <<'EOF'
+_       _           _                        /
+ )     /   _  ._  _|_ o  _      ._  _.  _ o  _  ._    o ._  o  _ o  _. |    _|  _     /\  ._  _ |_
+/_ o   \_ (_) | |  |  | (_| |_| |  (_| (_ | (_) | |   | | | | (_ | (_| |   (_| (/_   /--\ |  (_ | |
+                         _|
+EOF
+}
 
-# Verificar que se ejecuta como root
+arte_linux() { cat <<'EOF'
+        _                  /                        /
+/|     /  ._  _   _.  _ o  _  ._     _|  _    |\/|  _.  _.     o ._   _.   \  / o ._ _|_      _. |
+ | o   \_ |  (/_ (_| (_ | (_) | |   (_| (/_   |  | (_| (_| |_| | | | (_|    \/  | |   |_ |_| (_| |
+                                                         |
+EOF
+}
+
+arte_escritorio() { cat <<'EOF'
+_      ___                  _                  /    _
+_)      |  ._  _|_  _  ._ _|_  _. _     _  ._  _. _|_ o  _  _.
+_) o   _|_ | |  |_ (/_ |   |  (_| /_   (_| |  (_|  |  | (_ (_|
+                                        _|
+EOF
+}
+
+arte_paru() { cat <<'EOF'
+_      ___                            /
+ )      |  ._   _ _|_  _. |  _.  _ o  _  ._     _|  _    ._  _  ._   _   _ o _|_  _  ._ o  _   _    _|  _     _  _   _      ._ o  _|  _.  _|        ._   _.  _.      _  _|_  _   _
+/_ o   _|_ | | _>  |_ (_| | (_| (_ | (_) | |   (_| (/_   |  (/_ |_) (_) _> |  |_ (_) |  | (_) _>   (_| (/_   _> (/_ (_| |_| |  | (_| (_| (_|   \/   |_) (_| (_| |_| (/_  |_ (/_ _>
+                                                                |                                                    _|                        /    |         |
+EOF
+}
+
+arte_pentest() { cat <<'EOF'
+                                                                   _
+|_|_     |_|  _  ._ ._  _. ._ _  o  _  ._  _|_  _.  _    _|  _    |_)  _  ._  _|_  _   _ _|_ o ._   _
+  |  o   | | (/_ |  |  (_| | | | | (/_ | |  |_ (_| _>   (_| (/_   |   (/_ | |  |_ (/_ _>  |_ | | | (_|
+                                                                                                    _|
+EOF
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  PROGRESO POR ETAPAS
+# ────────────────────────────────────────────────────────────────────────────
+ETAPA_NUM=0
+ETAPA_TOT=1
+ETAPA_ACTUAL=0
+ETAPA_TOTAL=1
+PASO_NUM=0
+PASO_TOT=1
+
+barra() { # <porcentaje 0-100>
+  local v="$1" ancho=26 lleno i out=""
+  (( v < 0 )) && v=0
+  (( v > 100 )) && v=100
+  lleno=$(( v * ancho / 100 ))
+  for (( i = 0; i < ancho; i++ )); do
+    if (( i < lleno )); then out+="█"; else out+="░"; fi
+  done
+  printf '%s' "$out"
+}
+
+etapa() { # <numero> <total> <nombre> [arte]
+  local num="$1" tot="$2" nombre="$3" arte="${4:-}"
+  local rotulo="$num/$tot · $nombre" pre="── ETAPA " suf="──"
+  local ancho guiones
+  ETAPA_NUM="$num"; ETAPA_TOT="$tot"; PASO_NUM=0
+  echo
+  # 1) Arte del guide si viene dado y cabe; si no, el rotulo compacto del
+  #    nombre de la etapa (siempre cabe porque se parte en varios trozos).
+  if [[ -n "$arte" ]] && imprimir_arte "$arte"; then
+    :
+  else
+    imprimir_arte "$(arte_titulo "$nombre")" || true
+  fi
+  # 2) Linea de etapa: "ETAPA n/total · nombre" con regla de cierre. Si el
+  #    terminal es estrecho, el nombre se pasa a su propia linea.
+  ancho="$(ancho_terminal)"
+  (( ancho > 72 )) && ancho=72
+  if (( $(columnas "$pre $rotulo $suf") + 3 <= ancho )); then
+    guiones=$(( ancho - $(columnas "$pre $rotulo $suf") ))
+    (( guiones < 3 )) && guiones=3
+    echo -e "${C_CIA}${pre}${C_VERDE}${rotulo}${C_RESET}${C_CIA}$(repeticion '─' "$guiones")${suf}${C_RESET}"
+  else
+    pre+="$num/$tot "
+    guiones=$(( ancho - $(columnas "$pre $suf") ))
+    (( guiones < 3 )) && guiones=3
+    echo -e "${C_CIA}${pre}$(repeticion '─' "$guiones")${suf}${C_RESET}"
+    echo -e "${C_VERDE}   $nombre${C_RESET}"
+  fi
+}
+
+# nueva_etapa <nombre> [arte]  ->  numera sola dentro de la fase actual
+nueva_etapa() {
+  ETAPA_ACTUAL=$(( ETAPA_ACTUAL + 1 ))
+  etapa "$ETAPA_ACTUAL" "$ETAPA_TOTAL" "$1" "${2:-}"
+}
+
+# paso <descripcion> <comando> [args...]  ->  anuncia el paso y lo ejecuta
+paso() {
+  local desc="$1"; shift
+  PASO_NUM=$(( PASO_NUM + 1 ))
+  local pct=$(( PASO_NUM * 100 / PASO_TOT ))
+  local b
+  if (( pct > 100 )); then pct=100; fi
+  b="$(barra "$pct")"
+  echo -e "  ${C_MAG}▸${C_RESET} ${C_CIA}[${b}] ${pct}%${C_RESET}  ${desc}"
+  registrar "PASO $PASO_NUM/$PASO_TOT - $desc"
+  if "$@"; then
+    return 0
+  fi
+  warn "No se pudo completar: $desc"
+  return 1
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  UTILIDADES
+# ────────────────────────────────────────────────────────────────────────────
 check_root() {
   if [[ $EUID -ne 0 ]]; then
-    die "Por favor, ejecuta este script como root (sudo ./Instalacion_Predatox)."
+    die "Ejecuta este script como root:  ./Instalacion_Predatox"
   fi
 }
 
-# Verificar conexion a internet y detectar la zona horaria por ubicacion
-check_internet() {
-  info "Comprobando conexion a internet..."
-  local ping_ok=1 curl_ok=1
-  ping -c 3 -W 3 archlinux.org >/dev/null 2>&1 && ping_ok=0 || true
-  curl -fsS --max-time 10 https://archlinux.org >/dev/null 2>&1 && curl_ok=0 || true
-
-  if (( ping_ok != 0 && curl_ok != 0 )); then
-    fail "Sin conexion a internet. Verifica la red NAT / DHCP del virtualizador."
-    die "No se puede continuar sin acceso a internet en el ISO."
-  fi
-  if (( ping_ok != 0 )); then
-    warn "El ping no respondio (ICMP bloqueado) pero la conexion HTTPS funciona."
-  fi
-  ok "Conexion a internet disponible."
-
-  TIMEZONE="${TIMEZONE:-$(detectar_zona_horaria)}"
-  info "Zona horaria detectada: $TIMEZONE"
+detectar_virtualizador() {
+  local virt
+  virt="$(systemd-detect-virt 2>/dev/null || true)"
+  case "${virt,,}" in
+    vmware)            echo "vmware" ;;
+    oracle|virtualbox) echo "virtualbox" ;;
+    *)                 echo "ninguna" ;;
+  esac
 }
 
-# Detectar la zona horaria segun la ubicacion de la IP publica
+detectar_boot_mode() {
+  if [[ -d /sys/firmware/efi ]]; then echo "UEFI"; else echo "BIOS"; fi
+}
+
 detectar_zona_horaria() {
   local tz=""
   tz="$(curl -fsS --max-time 8 https://ipapi.co/timezone 2>/dev/null)" && [[ -n "$tz" ]] \
     || tz="$(curl -fsS --max-time 8 https://worldtimeapi.org/api/ip 2>/dev/null \
              | grep -oP '"timezone":\s*"[^"]+"' | head -n1 | cut -d'"' -f4)" || true
-  [[ -z "$tz" ]] && tz="$(curl -fsS --max-time 8 http://ip-api.com/json 2>/dev/null \
+  [[ -n "$tz" ]] || tz="$(curl -fsS --max-time 8 http://ip-api.com/json 2>/dev/null \
              | grep -oP '"timezone":\s*"[^"]+"' | head -n1 | cut -d'"' -f4)" || true
   tz="${tz:-America/Mexico_City}"
   [[ -e "/usr/share/zoneinfo/$tz" ]] || tz="America/Mexico_City"
   echo "$tz"
 }
 
-# Aplicar los valores que no necesitan preguntarse (deteccion automatica)
-aplicar_valores_automaticos() {
-  KEYMAP="${KEYMAP:-es}"
-  LANG_CFG="${LANG_CFG:-es_MX.UTF-8}"
-  TIMEZONE="${TIMEZONE:-$(detectar_zona_horaria)}"
-  DISK="${DISK:-$(detectar_disco)}"
-  [[ -b "$DISK" ]] || die "No se pudo detectar un disco valido (sda/nvme0n1)."
-  BOOT_SIZE="${BOOT_SIZE:-1G}"
-  SWAP_SIZE="${SWAP_SIZE:-5G}"
-  BOOT_MODE="${BOOT_MODE:-$( [[ -d /sys/firmware/efi ]] && echo UEFI || echo BIOS )}"
-  VIRTUALIZER="${VIRTUALIZER:-$(detectar_virtualizador)}"
-  INSTALL_GUI="${INSTALL_GUI:-S}"
-  INSTALL_PARU="${INSTALL_PARU:-S}"
-  INSTALL_BLACKARCH="${INSTALL_BLACKARCH:-S}"
-  INSTALL_PENTEST="${INSTALL_PENTEST:-N}"
-  STATIC_IP="${STATIC_IP:-N}"
-  IFACE="${IFACE:-}"; IPV4="${IPV4:-}"; PREFIX="${PREFIX:-}"; GATEWAY="${GATEWAY:-}"; DNS="${DNS:-}"
-  WALLPAPER_LOGIN="${WALLPAPER_LOGIN:-}"
-  WALLPAPER_USUARIO="${WALLPAPER_USUARIO:-}"
-  WALLPAPER_GRUB="${WALLPAPER_GRUB:-}"
+# Disco de destino: el mas grande que NO sea el USB/ISO desde el que se
+# arranco (formatear ese dispositivo destruiria el medio de instalacion) y,
+# si es posible, sin puntos de montaje activos.
+detectar_disco() {
+  local nombre tamano iso_src iso_padre cand mejor="" mejor_gib=0 gib
+  iso_src="$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)"
+  if [[ -n "$iso_src" ]]; then
+    iso_padre="/dev/$(lsblk -no PKNAME "$iso_src" 2>/dev/null)"
+  else
+    iso_padre="/dev/__ninguno__"
+  fi
+
+  while read -r nombre tamano; do
+    [[ -b "$nombre" ]] || continue
+    [[ "$nombre" == "$iso_padre" ]] && continue
+    # Se descartan los discos con algo montado (medio de arranque, otro SO).
+    if lsblk -nrpo MOUNTPOINT "$nombre" 2>/dev/null | grep -q '[^[:space:]]'; then continue; fi
+    gib=$(( ${tamano:-0} / 1024 / 1024 / 1024 ))
+    if (( gib > mejor_gib )); then
+      mejor_gib="$gib"; mejor="$nombre"
+    fi
+  done < <(lsblk -b -dpno NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk" {print $1, $2}')
+
+  # Si todos los discos tienen algo montado, se toma el mayor que no sea el ISO.
+  if [[ -z "$mejor" ]]; then
+    while read -r nombre tamano; do
+      [[ -b "$nombre" ]] || continue
+      [[ "$nombre" == "$iso_padre" ]] && continue
+      gib=$(( ${tamano:-0} / 1024 / 1024 / 1024 ))
+      if (( gib > mejor_gib )); then mejor_gib="$gib"; mejor="$nombre"; fi
+    done < <(lsblk -b -dpno NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk" {print $1, $2}')
+  fi
+
+  [[ -n "$mejor" ]] || return 1
+  echo "$mejor"
 }
 
-# Elegir un wallpaper al azar de un directorio. <directorio> [prefijo_nombre]
-#   - Sin prefijo: cualquier imagen (png/jpg/jpeg).
-#   - Con prefijo: solo archivos que empiecen con ese prefijo (p.ej. "background").
+parsear_tamano() { # <1G|500M|2048> -> MiB
+  local t="${1^^}" n
+  t="${t// /}"
+  n="${t//[A-Z]/}"
+  case "$t" in
+    *K|*KB) echo $(( ${n:-0} / 1024 + 1 )) ;;
+    *M|*MB) echo "${n:-0}" ;;
+    *G|*GB) echo $(( ${n:-0} * 1024 )) ;;
+    *T|*TB) echo $(( ${n:-0} * 1024 * 1024 )) ;;
+    "")     echo 0 ;;
+    *[!0-9]*) echo 0 ;;
+    *)      echo "${n:-0}" ;;
+  esac
+}
+
+particion_n() { # <disco> <numero> -> /dev/nvme0n1p1 | /dev/sda1
+  local disco="$1" num="$2"
+  if [[ "$disco" == *nvme* ]]; then echo "${disco}p${num}"; else echo "${disco}${num}"; fi
+}
+
 elegir_wallpaper() { # <directorio> [prefijo]
-  local dir="$1" pre="${2:-}"
+  local dir="$1" pre="${2:-}" opciones
   shopt -s nullglob
-  local -a opciones
   if [[ -n "$pre" ]]; then
     opciones=("$dir"/${pre}*.png "$dir"/${pre}*.jpg "$dir"/${pre}*.jpeg)
   else
     opciones=("$dir"/*.png "$dir"/*.jpg "$dir"/*.jpeg "$dir"/*.PNG "$dir"/*.JPG)
   fi
   shopt -u nullglob
-  [[ ${#opciones[@]} -gt 0 ]] || { echo ""; return 1; }
-  echo "$(basename "${opciones[$(( RANDOM % ${#opciones[@]} ))]}")"
+  [[ ${#opciones[@]} -gt 0 ]] || return 1
+  basename "${opciones[$(( RANDOM % ${#opciones[@]} ))]}"
 }
 
-# ──────────────────────────────────────────────────────────────────────────
-#  SOLICITUD DE DATOS AL USUARIO
-# ──────────────────────────────────────────────────────────────────────────
-preguntar() { # preguntar <variable> <mensaje> <default>
-  local var="$1" msg="$2" def="${3:-}" respuesta
-  if [[ -n "$def" ]]; then
-    printf '%s [%s]: ' "$msg" "$def"
-    read -r respuesta || respuesta="$def"
-    respuesta="${respuesta:-$def}"
-  else
-    while :; do
-      printf '%s: ' "$msg"
-      read -r respuesta || return 1
-      [[ -n "$respuesta" ]] && break
-    done
+# ────────────────────────────────────────────────────────────────────────────
+#  CONTRASENAS: hash SHA-512 + "chpasswd -e"
+#  Asi cualquier caracter especial ($, #, \, :, %, comillas, espacios) se
+#  guarda tal cual: nunca pasa por un archivo de texto interpretable.
+# ────────────────────────────────────────────────────────────────────────────
+hash_contrasena() { # <contrasena> -> hash SHA-512 (o vacio si no hay openssl)
+  local p="$1" h=""
+  if command -v openssl >/dev/null 2>&1; then
+    h="$(printf '%s' "$p" | openssl passwd -6 -stdin 2>/dev/null | tr -d '\n\r')"
   fi
-  printf -v "$var" '%s' "$respuesta"
+  if [[ -z "$h" ]] && command -v python3 >/dev/null 2>&1; then
+    h="$(printf '%s' "$p" | python3 -c \
+      'import sys,crypt;print(crypt.crypt(sys.stdin.read(),crypt.mksalt(crypt.METHOD_SHA512)))' \
+      2>/dev/null | tr -d '\n\r')"
+  fi
+  [[ "$h" == \$6\$* ]] || return 1
+  printf '%s' "$h"
 }
 
-preguntar_password() { # <variable> <mensaje>
-  local var="$1" msg="$2" p1 p2
+# Aplica una contrasena ya hasheada y VERIFICA que quedo bien guardada.
+# Si chpasswd -e no surte efecto se reintenta con usermod -p.
+aplicar_contrasena() { # <usuario> <hash> [contrasena_plana]
+  local usr="$1" hash="$2" plano="${3:-}" real
+  if [[ -n "$hash" && "$hash" == \$6\$* ]]; then
+    printf '%s:%s\n' "$usr" "$hash" | chpasswd -e 2>/dev/null || true
+    real="$(getent shadow "$usr" 2>/dev/null | cut -d: -f2)"
+    if [[ "$real" != "$hash" ]]; then
+      usermod -p "$hash" "$usr" 2>/dev/null || true
+      real="$(getent shadow "$usr" 2>/dev/null | cut -d: -f2)"
+    fi
+  elif [[ -n "$plano" ]]; then
+    printf '%s:%s\n' "$usr" "$plano" | chpasswd 2>/dev/null || true
+  else
+    fail "No hay contrasena disponible para $usr"
+    return 1
+  fi
+  # La cuenta no debe quedar bloqueada ni con caducidad.
+  chage -E -1 -M 99999 -I -1 "$usr" 2>/dev/null || true
+  passwd -u "$usr" >/dev/null 2>&1 || true
+  # Verificacion final: el hash guardado debe existir y estar activo.
+  real="$(getent shadow "$usr" 2>/dev/null | cut -d: -f2)"
+  if [[ -z "$real" || "$real" == '!'* || "$real" == '*' ]]; then
+    fail "No se pudo guardar la contrasena de $usr"
+    return 1
+  fi
+  ok "Contrasena de $usr guardada y verificada (SHA-512)"
+  return 0
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  PREGUNTAS (solo 4) Y CONFIGURACION
+# ────────────────────────────────────────────────────────────────────────────
+preguntar() { # <variable> <mensaje> [default]
+  local var="$1" msg="$2" def="${3:-}" r
   while :; do
-    read -rsp "$msg: " p1; echo
-    read -rsp "Confirma $msg: " p2; echo
-    if [[ -z "$p1" ]]; then warn "La contrasena no puede estar vacia."; continue; fi
-    if [[ "$p1" != "$p2" ]]; then warn "Las contrasenas no coinciden, intenta de nuevo."; continue; fi
-    printf -v "$var" '%s' "$p1"
+    if [[ -n "$def" ]]; then
+      printf '%s [%s]: ' "$msg" "$def"
+    else
+      printf '%s: ' "$msg"
+    fi
+    if ! read -r r; then return 1; fi
+    r="${r#"${r%%[![:space:]]*}"}"
+    r="${r%"${r##*[![:space:]]}"}"
+    if [[ -n "$r" ]]; then
+      printf -v "$var" '%s' "$r"
+      return 0
+    fi
+    if [[ -n "$def" ]]; then
+      printf -v "$var" '%s' "$def"
+      return 0
+    fi
+    warn "El valor no puede estar vacio."
+  done
+}
+
+# Usuario: acepta mayusculas y minusculas. Linux exige nombre en minusculas
+# (useradd rechaza 'Pedrito'), asi que se normaliza y se avisa al usuario.
+preguntar_usuario() {
+  local r limpio
+  while :; do
+    printf 'Nombre del usuario personal (ej. Pedrito): '
+    read -r r || exit 1
+    limpio="$(printf '%s' "$r" | tr -d '[:space:]')"
+    if [[ -z "$limpio" ]]; then
+      warn "El nombre de usuario no puede estar vacio."
+      continue
+    fi
+    if [[ ! "$limpio" =~ ^[A-Za-z][A-Za-z0-9._-]*$ ]]; then
+      warn "Solo letras, numeros, punto, guion y subguion; debe iniciar con letra."
+      continue
+    fi
+    if [[ "$limpio" =~ [A-Z] ]]; then
+      USER_NAME="${limpio,,}"
+      info "Se usara en minusculas (Linux no admite mayusculas en usuarios): $USER_NAME"
+    else
+      USER_NAME="$limpio"
+    fi
     return 0
   done
 }
 
-preguntar_si_no() { # <variable> <mensaje> <default>
-  local var="$1" msg="$2" def="${3:-n}" respuesta
+# Hostname: acepta mayusculas y minusculas y las conserva tal cual.
+preguntar_hostname() {
+  local r
   while :; do
-    printf '%s (s/n) [%s]: ' "$msg" "$def"
-    read -r respuesta || respuesta="$def"
-    respuesta="${respuesta:-$def}"
-    case "${respuesta,,}" in
-      s|si|sí|yes|y) printf -v "$var" 'S'; return 0 ;;
-      n|no)          printf -v "$var" 'N'; return 0 ;;
-      *) warn "Responde si o no.";;
-    esac
+    printf 'Nombre del equipo (hostname, ej. Predatox-PC): '
+    read -r r || exit 1
+    r="$(printf '%s' "$r" | tr -d '[:space:]')"
+    if [[ -z "$r" ]]; then
+      warn "El nombre del equipo no puede estar vacio."
+      continue
+    fi
+    if [[ ! "$r" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      warn "Solo letras, numeros, punto, guion y subguion."
+      continue
+    fi
+    HOSTNAME="$r"
+    return 0
   done
 }
 
-leer_config() { # leer_config <archivo>
+# Contrasena: se lee sin eco y se convierte a hash SHA-512 de inmediato, de
+# modo que ningun caracter especial se pierde al guardarla.
+preguntar_contrasena() { # <variable> <etiqueta>
+  local var="$1" msg="$2" p1 p2
+  while :; do
+    read -rsp "Contrasena de $msg: " p1; echo
+    read -rsp "Repite la contrasena de $msg: " p2; echo
+    if [[ -z "$p1" ]]; then
+      warn "La contrasena no puede estar vacia."
+      continue
+    fi
+    if [[ "$p1" != "$p2" ]]; then
+      warn "Las contrasenas no coinciden, intenta de nuevo."
+      continue
+    fi
+    if [[ "$p1" == *"$(printf '\n')"* ]]; then
+      warn "La contrasena no puede contener saltos de linea."
+      continue
+    fi
+    printf -v "${var}_PLANA" '%s' "$p1"
+    if ! printf -v "${var}_HASH" '%s' "$(hash_contrasena "$p1")"; then
+      fail "openssl no esta disponible: no se puede guardar la contrasena de forma segura."
+      return 1
+    fi
+    unset p1 p2
+    ok "Contrasena de $msg aceptada (se guardara cifrada en SHA-512)"
+    return 0
+  done
+}
+
+aplicar_valores_automaticos() {
+  KEYMAP="${KEYMAP:-es}"
+  LANG_CFG="${LANG_CFG:-es_MX.UTF-8}"
+  TIMEZONE="${TIMEZONE:-$(detectar_zona_horaria)}"
+  BOOT_MODE="${BOOT_MODE:-$(detectar_boot_mode)}"
+  VIRTUALIZER="${VIRTUALIZER:-$(detectar_virtualizador)}"
+  if [[ -z "${DISK:-}" ]]; then
+    DISK="$(detectar_disco)" || die "No se encontro ningun disco apto (sda/nvme0n1). Define DISK= en un archivo de configuracion."
+  fi
+  [[ -b "$DISK" ]] || die "El disco $DISK no existe o no es un dispositivo de bloque."
+  IFACE="${IFACE:-}"; IPV4="${IPV4:-}"; PREFIX="${PREFIX:-}"; GATEWAY="${GATEWAY:-}"; DNS="${DNS:-}"
+  WALLPAPER_LOGIN="${WALLPAPER_LOGIN:-}"
+  WALLPAPER_USUARIO="${WALLPAPER_USUARIO:-}"
+  WALLPAPER_GRUB="${WALLPAPER_GRUB:-}"
+}
+
+leer_config() { # <archivo>
   local archivo="$1"
   [[ -f "$archivo" ]] || die "No existe el archivo de configuracion: $archivo"
   # shellcheck source=/dev/null
@@ -245,20 +678,19 @@ leer_config() { # leer_config <archivo>
   ok "Configuracion precargada desde $archivo"
 }
 
-escribir_config() { # escribir_config <archivo>
+# El archivo de configuracion solo lleva HASHES: ningun texto plano en disco.
+escribir_config() { # <archivo>
   local archivo="$1"
-  # Se usa %q SIN comillas simples externas: las comillas evitarian que bash
-  # desescape los backslashes al hacer source, corrompiendo contrasenas con
-  # caracteres especiales (ej. ab#cd\$ef\!gh).
   cat > "$archivo" <<EOF
-# Configuracion generada por Instalacion_Predatox
+# Generado por Instalacion_Predatox · no editar a mano
 USER_NAME=$(printf %q "$USER_NAME")
 HOSTNAME=$(printf %q "$HOSTNAME")
-ROOT_PASS=$(printf %q "$ROOT_PASS")
-USER_PASS=$(printf %q "$USER_PASS")
+ROOT_PASS_HASH=$(printf %q "${ROOT_PASS_HASH:-}")
+USER_PASS_HASH=$(printf %q "${USER_PASS_HASH:-}")
 TIMEZONE=$(printf %q "$TIMEZONE")
 KEYMAP=$(printf %q "$KEYMAP")
 LANG_CFG=$(printf %q "$LANG_CFG")
+XKBLAYOUT=$(printf %q "${XKBLAYOUT:-latam}")
 DISK=$(printf %q "$DISK")
 BOOT_MODE=$(printf %q "$BOOT_MODE")
 BOOT_SIZE=$(printf %q "$BOOT_SIZE")
@@ -281,108 +713,59 @@ EOF
   chmod 600 "$archivo"
 }
 
-detectar_virtualizador() {
-  local virt
-  virt="$(systemd-detect-virt 2>/dev/null || true)"
-  case "${virt,,}" in
-    vmware)                    echo "vmware" ;;
-    oracle|virtualbox)         echo "virtualbox" ;;
-    *)                         echo "ninguna" ;;
-  esac
-}
-
-detectar_disco() {
-  local d
-  while read -r d _; do
-    [[ "$d" == /dev/sd[a-z]* || "$d" == /dev/nvme[0-9]n[0-9] ]] && { echo "$d"; return 0; }
-  done < <(lsblk -dpno NAME,TYPE 2>/dev/null | awk '$2=="disk" {print $1}')
-  echo ""
-}
-
-parsear_tamano() { # <tamano>  -> devuelve MiB (aprox)
-  local t="${1^^}" n
-  t="${t// /}"
-  n="${t//[A-Z]/}"
-  case "$t" in
-    *K|*KB) echo $(( ${n:-0} / 1024 + 1 )) ;;
-    *M|*MB) echo ${n:-0} ;;
-    *G|*GB) echo $(( ${n:-0} * 1024 )) ;;
-    *T|*TB) echo $(( ${n:-0} * 1024 * 1024 )) ;;
-    ""|*[0-9]*) echo ${n:-0} ;;
-    *) echo 0 ;;
-  esac
-}
-
-particion_n() { # <disco> <número> -> devuelve /dev/nvme0n1p1 ó /dev/sda1
-  local disco="$1" num="$2"
-  if [[ "$disco" =~ nvme ]]; then echo "${disco}p${num}"; else echo "${disco}${num}"; fi
-}
-
-# ──────────────────────────────────────────────────────────────────────────
-#  COLECTA DE CONFIGURACION (con prompts o desde archivo)
-# ──────────────────────────────────────────────────────────────────────────
-colectar_config() {
-  info "Solo se piden los datos indispensables; el resto se detecta automaticamente."
-
-  # --- Datos base ---
-  preguntar USER_NAME "Nombre del usuario personal" || exit 1
-  while [[ ! "$USER_NAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; do
-    warn "El nombre de usuario solo puede tener minusculas, numeros, guiones y subguiones."
-    preguntar USER_NAME "Nombre del usuario personal" || exit 1
-  done
-  preguntar HOSTNAME "Nombre del equipo (hostname)" "" || exit 1
-
-  preguntar_password ROOT_PASS "Contrasena para root"
-  preguntar_password USER_PASS "Contrasena para el usuario $USER_NAME"
-
-  # --- Valores automaticos ---
-  aplicar_valores_automaticos
-  ok "Disco detectado: $DISK  (modo $BOOT_MODE, virtualizador: $VIRTUALIZER)"
-
-  # --- Resumen y confirmacion ---
-  ht_sep
-  info "RESUMEN DE CONFIGURACION"
-  echo "  Usuario        : $USER_NAME"
-  echo "  Hostname       : $HOSTNAME"
-  echo "  Zona horaria   : $TIMEZONE"
-  echo "  Teclado        : $KEYMAP"
-  echo "  Locale         : $LANG_CFG"
-  echo "  Disco          : $DISK  ($BOOT_MODE)"
-  echo "  Arranque/boot  : $BOOT_SIZE   Swap: $SWAP_SIZE"
-  echo "  Virtualizador  : $VIRTUALIZER"
-  echo "  Entorno grafico: $INSTALL_GUI    Paru: $INSTALL_PARU"
-  echo "  BlackArch      : $INSTALL_BLACKARCH   Pentest: $INSTALL_PENTEST"
-  ht_sep
-
-  echo -e "${C_ROJO}ADVERTENCIA: Esta operacion BORRARA por completo el disco $DISK.${C_RESET}"
-  read -rp "Pulsa ENTER para continuar o Ctrl+C para cancelar..."
-}
-
-# ──────────────────────────────────────────────────────────────────────────
-#  FASE ISO: particionado, formateo y montaje
-# ──────────────────────────────────────────────────────────────────────────
-setup_teclado_hora() {
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO · ETAPA 1/5 · PREPARACION
+# ────────────────────────────────────────────────────────────────────────────
+paso_teclado() {
   info "Cargando distribucion del teclado ($KEYMAP)..."
-  loadkeys "$KEYMAP" 2>/dev/null || warn "No se pudo cargar el teclado en la sesion actual."
-  info "Configurando zona horaria ($TIMEZONE)..."
-  timedatectl set-timezone "$TIMEZONE" 2>/dev/null || warn "No se pudo cambiar la zona horaria aun (se hara en chroot)."
-  timedatectl 2>/dev/null || true
+  loadkeys "$KEYMAP" 2>/dev/null || warn "No se pudo cargar el teclado en esta sesion (se aplicara en el sistema instalado)."
 }
 
-particionar() {
-  info "Particionando $DISK (tabla ${BOOT_MODE})."
-  local total_mib boot_mib swap_mib root_end boot_end boot_bytes swap_bytes
-  total_mib="$(($(blockdev --getsz "$DISK") * 512 / 1024 / 1024))"
-  boot_bytes="$(parsear_tamano "$BOOT_SIZE")"
-  swap_bytes="$(parsear_tamano "$SWAP_SIZE")"
-  boot_mib="$boot_bytes"
-  swap_mib="$swap_bytes"
-  root_end=$(( total_mib - swap_mib ))
+paso_hora() {
+  info "Zona horaria: $TIMEZONE"
+  timedatectl set-timezone "$TIMEZONE" 2>/dev/null || warn "Zona horaria pendiente (se aplicara dentro del chroot)."
+  timedatectl 2>/dev/null | sed 's/^/       /' || true
+}
+
+paso_detectar_disco() {
+  local gib
+  gib=$(( $(blockdev --getsize64 "$DISK" 2>/dev/null || echo 0) / 1024 / 1024 / 1024 ))
+  ok "Disco de destino: $DISK (${gib} GB)  ·  arranque $BOOT_MODE  ·  swap $SWAP_SIZE  ·  virtualizador $VIRTUALIZER"
+}
+
+resumen_config() {
+  separador
+  info "RESUMEN DE LA INSTALACION (no se pide confirmacion, continua solo)"
+  echo "    Usuario        : $USER_NAME"
+  echo "    Hostname       : $HOSTNAME"
+  echo "    Contrasenas    : root y $USER_NAME (cifradas SHA-512, admiten \$ # \\ : % \" ' etc.)"
+  echo "    Zona horaria   : $TIMEZONE      Teclado: $KEYMAP      Locale: $LANG_CFG"
+  echo "    Disco          : $DISK  ($BOOT_MODE)"
+  echo "    Particiones    : arranque $BOOT_SIZE · root (resto) · swap $SWAP_SIZE"
+  echo "    Opcionales     : GUI=$INSTALL_GUI  Paru=$INSTALL_PARU  BlackArch=$INSTALL_BLACKARCH  Pentest=$INSTALL_PENTEST"
+  separador
+  warn "El disco $DISK sera formateado por completo. No habra preguntas adicionales."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO · ETAPA 2/5 · PARTICIONADO
+# ────────────────────────────────────────────────────────────────────────────
+paso_tabla_particiones() {
+  local total_mib boot_mib swap_mib free_mib root_end boot_end
+  total_mib=$(( $(blockdev --getsz "$DISK") * 512 / 1024 / 1024 ))
+  boot_mib="$(parsear_tamano "$BOOT_SIZE")"
+  swap_mib="$(parsear_tamano "$SWAP_SIZE")"
+  free_mib="$(parsear_tamano "$FREE_SIZE")"
   boot_end=$(( 1 + boot_mib ))
-  (( root_end > boot_end )) || die "Tamanos de particion invalidos: revisa BOOT_SIZE y SWAP_SIZE."
+  root_end=$(( total_mib - swap_mib - free_mib ))
+  if (( root_end <= boot_end )); then
+    die "Tamanos invalidos para un disco de ${total_mib} MiB (BOOT_SIZE=$BOOT_SIZE, SWAP_SIZE=$SWAP_SIZE)."
+  fi
+  info "Tabla $BOOT_MODE en $DISK: arranque ${boot_mib} MiB · root $(( root_end - boot_end )) MiB · swap ${swap_mib} MiB"
 
   umount -R /mnt 2>/dev/null || true
   swapoff -a 2>/dev/null || true
+  wipefs -a "$DISK" >/dev/null 2>&1 || true
 
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
     parted -s "$DISK" mklabel gpt
@@ -397,153 +780,211 @@ particionar() {
     parted -s "$DISK" mkpart primary ext4 "${boot_end}MiB" "${root_end}MiB"
     parted -s "$DISK" mkpart primary linux-swap "${root_end}MiB" 100%
   fi
+  ok "Particiones creadas."
+}
 
-  # Esperar a que el kernel registre las particiones
-  local contador
-  for ((contador=0; contador<20; contador++)); do
-    lsblk -pno NAME "$DISK" | grep -q "$(particion_n "$DISK" 3)" && break
+paso_esperar_particiones() {
+  local p3 c
+  p3="$(particion_n "$DISK" 3)"
+  for (( c = 0; c < 20; c++ )); do
+    if lsblk -pno NAME "$DISK" 2>/dev/null | grep -q -- "$p3$"; then break; fi
     sleep 1
   done
   partprobe "$DISK" 2>/dev/null || true
   sleep 2
-  ok "Tabla de particiones creada."; lsblk -p "$DISK"
+  lsblk -p "$DISK" | sed 's/^/       /'
 }
 
-formatear_montar() {
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO · ETAPA 3/5 · FORMATEO Y MONTAJE (sin confirmacion)
+# ────────────────────────────────────────────────────────────────────────────
+paso_formatear() {
   local p1 p2 p3
   p1="$(particion_n "$DISK" 1)"; p2="$(particion_n "$DISK" 2)"; p3="$(particion_n "$DISK" 3)"
-
-  info "Formateando particiones..."
+  info "Formateando $p1, $p2 y $p3..."
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    mkfs.fat -F32 "$p1"
+    mkfs.fat -F32 "$p1" >/dev/null || die "No se pudo formatear $p1"
   else
-    mkfs.ext4 -F "$p1"
+    mkfs.ext4 -F -q "$p1" >/dev/null || die "No se pudo formatear $p1"
   fi
-  mkfs.ext4 -F "$p2"
-  mkswap "$p3"
-  swapon "$p3"
-
-  info "Montando particiones..."
-  mount "$p2" /mnt
-  mkdir -p /mnt/boot
-  mount "$p1" /mnt/boot
-  ok "Particiones montadas:"; lsblk -p "$DISK"
+  mkfs.ext4 -F -q "$p2" >/dev/null || die "No se pudo formatear $p2"
+  mkswap "$p3" >/dev/null || die "No se pudo crear el area de swap en $p3"
+  ok "Formateo completado."
 }
 
-instalar_base() {
-  local microcode="" cpu_pkgs=""
-  if [[ -f /proc/cpuinfo ]]; then
-    if grep -qi "GenuineIntel" /proc/cpuinfo; then microcode="intel-ucode";
-    elif grep -qi "AuthenticAMD" /proc/cpuinfo; then microcode="amd-ucode"; fi
+paso_montar() {
+  local p1 p2 p3
+  p1="$(particion_n "$DISK" 1)"; p2="$(particion_n "$DISK" 2)"; p3="$(particion_n "$DISK" 3)"
+  mkdir -p /mnt/boot
+  mount "$p2" /mnt || die "No se pudo montar $p2 en /mnt"
+  mount "$p1" /mnt/boot || die "No se pudo montar $p1 en /mnt/boot"
+  swapon "$p3" 2>/dev/null || warn "No se pudo activar el swap en $p3"
+  ok "Montajes listos en /mnt"
+  lsblk -p "$DISK" | sed 's/^/       /'
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO · ETAPA 4/5 · SISTEMA BASE
+# ────────────────────────────────────────────────────────────────────────────
+paquetes_base() {
+  local microcode=""
+  if grep -qi "GenuineIntel" /proc/cpuinfo 2>/dev/null; then
+    microcode="intel-ucode"
+  elif grep -qi "AuthenticAMD" /proc/cpuinfo 2>/dev/null; then
+    microcode="amd-ucode"
   fi
-  [[ -n "$microcode" ]] && info "Microcode detectado: $microcode"
+  [[ -n "$microcode" ]] && info "Microcode del procesador: $microcode"
 
-  local paquetes_base=(base base-devel linux linux-firmware $microcode grub networkmanager wpa_supplicant
-                       openssh sudo vim nano git curl wget zsh plocate 7zip zip unzip tar feh
-                       fastfetch lsd bat xorg-server xorg-xinit xorg-xrandr lightdm lightdm-slick-greeter)
+  local pkgs=(base base-devel linux linux-firmware grub networkmanager wpa_supplicant
+              openssh sudo vim nano git curl wget zsh plocate p7zip zip unzip tar feh
+              fastfetch lsd bat openssl python)
+  [[ -n "$microcode" ]] && pkgs+=("$microcode")
 
-  if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    paquetes_base+=(efibootmgr)
+  if [[ "$BOOT_MODE" == "UEFI" ]]; then pkgs+=(efibootmgr); fi
+  if [[ "$INSTALL_GUI" == "S" ]]; then
+    pkgs+=(xorg-server xorg-xinit xorg-xrandr xorg-xsetroot lightdm lightdm-slick-greeter xdg-utils)
   fi
-
   case "$VIRTUALIZER" in
-    # VMware ya no provee xf86-video-vmware (driver obsoleto); el driver
-    # modesetting incluido en xorg-server cubre los graficos.
-    vmware)     paquetes_base+=(open-vm-tools xf86-input-vmmouse) ;;
-    virtualbox) paquetes_base+=(virtualbox-guest-utils) ;;
+    # VMware ya no publica xf86-video-vmware: el driver modesetting de
+    # xorg-server cubre los graficos.
+    vmware)     pkgs+=(open-vm-tools xf86-input-vmmouse) ;;
+    virtualbox) pkgs+=(virtualbox-guest-utils) ;;
   esac
 
-  info "Instalando paquetes base con pacstrap (esto puede tardar varios minutos)..."
-  pacstrap -K /mnt --noconfirm "${paquetes_base[@]}" \
-    || die "Fallo la instalacion de paquetes base. Revisa el mensaje anterior de pacman."
+  info "Ejecutando pacstrap (puede tardar varios minutos)..."
+  pacstrap -K /mnt --noconfirm "${pkgs[@]}" \
+    || die "Fallo pacstrap. Revisa el mensaje anterior (conexion a red o clave de firma)."
   ok "Sistema base instalado."
-
-  info "Generando fstab..."
-  genfstab -U /mnt > /mnt/etc/fstab
-  ok "fstab generado."; cat /mnt/etc/fstab
 }
 
-iniciar_chroot() {
-  # El script puede correrse como "bash <(curl ...)" o "curl | bash", donde
-  # $SELF apunta a un pipe/fd ya consumido y no se puede volver a copiar.
-  # Se re-descarga a un archivo real y se verifica que quede no vacio.
+paso_pacstrap() { paquetes_base; }
+
+paso_fstab() {
+  genfstab -U /mnt > /mnt/etc/fstab || die "No se pudo generar el fstab"
+  ok "fstab generado:"
+  sed 's/^/       /' /mnt/etc/fstab
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO · ETAPA 5/5 · COPIA DEL SCRIPT Y ENTRADA AL CHROOT
+# ────────────────────────────────────────────────────────────────────────────
+paso_copiar_script() {
   local tmp_script="/tmp/Instalacion_Predatox_directo"
+  # Si se ejecuto como "bash <(curl ...)" o "curl | bash", $SELF es un pipe ya
+  # consumido: se re-descarga a un archivo real.
   if [[ ! -f "$SELF" || ! -s "$SELF" ]]; then
-    warn "El script no es un archivo local valido; descargandolo temporalmente..."
-    curl -fsSL -o "$tmp_script" \
-      "$RAW_SCRIPT" \
-      || die "No se pudo descargar el script al temporal."
+    warn "El script no es un archivo local; descargandolo de $RAW_SCRIPT"
+    curl -fsSL -o "$tmp_script" "$RAW_SCRIPT" || die "No se pudo descargar el script."
     SELF="$tmp_script"
   fi
 
-  info "Copiando script y configuracion al sistema..."
   mkdir -p /mnt/root
-  install -m 0755 "$SELF" "$SCRIPT_TARGET"
-  escribir_config "$CONFIG_TARGET"
-
-  # Validar que el archivo dentro del chroot quedo listo realmente.
+  install -m 0755 "$SELF" "$SCRIPT_TARGET" 2>/dev/null || true
   if [[ ! -s "$SCRIPT_TARGET" || "$(head -c2 "$SCRIPT_TARGET" 2>/dev/null)" != "#!" ]]; then
-    warn "La copia quedo vacia; reintentando con descarga directa a /root..."
-    curl -fsSL -o "$SCRIPT_TARGET" \
-      "$RAW_SCRIPT" \
-      || die "No se pudo colocar el script en $SCRIPT_TARGET."
+    warn "Copia incompleta; descargando el script directamente a /root..."
+    local rama
+    for rama in $REPO_RAMAS; do
+      curl -fsSL -o "$SCRIPT_TARGET" "${RAW_BASE}/${rama}/Instalacion_Predatox" && break
+    done
     chmod 0755 "$SCRIPT_TARGET"
   fi
-  ok "Script listo en $SCRIPT_TARGET ($(wc -c < "$SCRIPT_TARGET") bytes)"
-
-  info "Configurando el sistema dentro de chroot..."
-  # bloquear reparticionado en fase chroot
-  arch-chroot /mnt /root/Instalacion_Predatox chroot \
-    || die "La fase chroot fallo. Revisa el mensaje anterior."
-  ok "Fase chroot completada."
+  [[ -s "$SCRIPT_TARGET" ]] || die "No se pudo dejar el script en $SCRIPT_TARGET"
+  escribir_config "$CONFIG_TARGET"
+  [[ -s "$CONFIG_TARGET" ]] || die "No se pudo escribir $CONFIG_TARGET"
+  ok "Script ($(wc -c < "$SCRIPT_TARGET") bytes) y configuracion listos dentro de /mnt"
 }
 
-# ──────────────────────────────────────────────────────────────────────────
-#  FASE CHROOT: configuración del sistema
-# ──────────────────────────────────────────────────────────────────────────
-configurar_sistema() {
-  # 1) Locale
-  info "Configurando locale ($LANG_CFG)..."
-  sed -i 's/^#en_US\.UTF-8 UTF-8$/en_US.UTF-8 UTF-8/' /etc/locale.gen
-  sed -i "s/^#${LANG_CFG//./\.} UTF-8$/${LANG_CFG//./\.} UTF-8/" /etc/locale.gen
-  locale-gen
+paso_entrar_chroot() {
+  info "Entrando al sistema instalado (esto puede tardar varios minutos)..."
+  arch-chroot /mnt /root/Instalacion_Predatox chroot || die "La fase chroot fallo."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 1/10 · CONFIGURACION DEL SISTEMA
+# ────────────────────────────────────────────────────────────────────────────
+ch_locale() {
+  local l
+  sed -i 's/^#en_US\.UTF-8 UTF-8.*/en_US.UTF-8 UTF-8/' /etc/locale.gen
+  for l in ${LANG_CFG//,/ }; do
+    sed -i "s/^#${l//./\.} UTF-8.*/${l//./\.} UTF-8/" /etc/locale.gen
+  done
+  grep -q "^${LANG_CFG//./\.} UTF-8" /etc/locale.gen || echo "${LANG_CFG} UTF-8" >> /etc/locale.gen
+  locale-gen >/dev/null 2>&1 || warn "locale-gen reporto problemas"
   echo "LANG=${LANG_CFG}" > /etc/locale.conf
+  ok "Locale: $LANG_CFG"
+}
 
-  # 2) Teclado
-  echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
-  echo "XKBLAYOUT=${KEYMAP}" >> /etc/vconsole.conf
+ch_teclado() {
+  cat > /etc/vconsole.conf <<EOF
+KEYMAP=${KEYMAP}
+XKBLAYOUT=${XKBLAYOUT:-latam}
+EOF
+  ok "Teclado de consola: $KEYMAP · X11: ${XKBLAYOUT:-latam}"
+}
 
-  # 3) Zona horaria y reloj
+ch_hora() {
   ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
-  hwclock --systohc 2>/dev/null || warn "hwclock no disponible en chroot."
+  hwclock --systohc 2>/dev/null || true
+  ok "Zona horaria: $TIMEZONE"
+}
 
-  # 4) hostname y hosts
+ch_hostname() {
   echo "$HOSTNAME" > /etc/hostname
   cat > /etc/hosts <<EOF
-127.0.0.1   localhost
-::1         localhost
-127.0.0.1   ${HOSTNAME}.localhost   ${HOSTNAME}
+127.0.0.1	localhost
+::1	localhost
+127.0.0.1	${HOSTNAME}.localhost	${HOSTNAME}
 EOF
-  ok "hostname configurado: $HOSTNAME"
+  hostnamectl set-hostname "$HOSTNAME" 2>/dev/null || true
+  ok "Hostname: $HOSTNAME"
+}
 
-  # 5) Red
-  [[ "${STATIC_IP:-N}" == "S" ]] && configurar_ip_fija
-
-  # 6) Usuarios y contrasenas
-  info "Configurando usuarios..."
-  echo "root:${ROOT_PASS}" | chpasswd
-  if ! id -u "$USER_NAME" >/dev/null 2>&1; then
-    useradd -m "$USER_NAME"
+ch_red() {
+  [[ "${STATIC_IP:-N}" == "S" ]] || { detalle "IP estatica: desactivada (DHCP)"; return 0; }
+  if ! command -v nmcli >/dev/null 2>&1; then
+    warn "nmcli no disponible: se omite la IP fija."
+    return 0
   fi
-  echo "${USER_NAME}:${USER_PASS}" | chpasswd
-  usermod -aG wheel "$USER_NAME"
-  groups "$USER_NAME"
+  nmcli con add con-name 'Ethernet' type ethernet ifname "$IFACE" \
+    ip4 "${IPV4}/${PREFIX}" gw4 "$GATEWAY" ipv4.dns "$DNS" ipv4.method manual >/dev/null 2>&1 \
+    || warn "No se pudo crear la conexion estatica"
+  nmcli con up 'Ethernet' >/dev/null 2>&1 || true
+  nmcli connection delete 'Wired connection 1' >/dev/null 2>&1 || true
+  ok "IP fija: ${IPV4}/${PREFIX} en $IFACE"
+}
 
-  # 7) sudoers (wheel con permisos)
-  sed -i 's/^# %wheel ALL=(ALL:ALL) ALL.*$/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 2/10 · USUARIOS Y CONTRASENAS
+# ────────────────────────────────────────────────────────────────────────────
+ch_contrasena_root() { aplicar_contrasena root "${ROOT_PASS_HASH:-}" "${ROOT_PASS_PLANA:-}"; }
 
-  # 8) pacman.conf
-  info "Ajustando pacman.conf..."
+ch_usuario() {
+  if ! id -u "$USER_NAME" >/dev/null 2>&1; then
+    useradd -m -G wheel -s /bin/bash "$USER_NAME" || die "No se pudo crear el usuario $USER_NAME"
+  fi
+  ok "Usuario creado: $USER_NAME"
+}
+
+ch_contrasena_usuario() { aplicar_contrasena "$USER_NAME" "${USER_PASS_HASH:-}" "${USER_PASS_PLANA:-}"; }
+
+ch_grupos() {
+  usermod -aG wheel,audio,video,storage,network,input,seat "$USER_NAME" 2>/dev/null || usermod -aG wheel,audio "$USER_NAME"
+  groups "$USER_NAME" | sed 's/^/       /'
+}
+
+ch_sudoers() {
+  sed -i 's/^# %wheel ALL=(ALL:ALL) ALL.*/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+  visudo -c >/dev/null 2>&1 || warn "visudo detecto un problema en /etc/sudoers"
+  # Acceso temporal sin contrasena para poder compilar Paru y usar el AUR.
+  printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$USER_NAME" > /etc/sudoers.d/90-instalacion_predatox
+  chmod 440 /etc/sudoers.d/90-instalacion_predatox
+  ok "sudo habilitado para el grupo wheel"
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 3/10 · PACMAN
+# ────────────────────────────────────────────────────────────────────────────
+ch_pacman_conf() {
   sed -i 's/^#Color$/Color/' /etc/pacman.conf
   if ! grep -q "^ParallelDownloads" /etc/pacman.conf; then
     sed -i 's/^#ParallelDownloads = .*/ParallelDownloads = 10/' /etc/pacman.conf
@@ -551,348 +992,731 @@ EOF
   if ! grep -q "^ILoveCandy" /etc/pacman.conf; then
     sed -i '/^ParallelDownloads/a ILoveCandy' /etc/pacman.conf
   fi
-  ok "pacman.conf actualizado."
+  ok "pacman.conf: Color, ParallelDownloads e ILoveCandy"
 }
 
-configurar_ip_fija() {
-  info "Configurando IP fija en ${IFACE} (${IPV4}/${PREFIX})..."
-  if command -v nmcli >/dev/null 2>&1; then
-    nmcli con add con-name 'Ethernet' type ethernet ifname "$IFACE" \
-      ip4 "${IPV4}/${PREFIX}" gw4 "$GATEWAY" ipv4.dns "$DNS" ipv4.method manual 2>/dev/null \
-      || nmcli con add con-name 'Ethernet' type ethernet ifname "$IFACE" 2>/dev/null
-    nmcli con up 'Ethernet' 2>/dev/null || true
-    nmcli connection delete 'Wired connection 1' 2>/dev/null || true
-    ok "IP fija configurada."
+ch_actualizar() {
+  # Ring ceremony: primero el keyring y despues la base completa.
+  pacman -Sy --needed --noconfirm archlinux-keyring >/dev/null 2>&1 || warn "No se pudo actualizar archlinux-keyring"
+  pacman -Syu --noconfirm >/dev/null 2>&1 || warn "La actualizacion del sistema reporto avisos (revisar /var/log/pacman.log)"
+  ok "Sistema actualizado."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 4/10 · PARU Y BLACKARCH
+# ────────────────────────────────────────────────────────────────────────────
+ch_paru() {
+  [[ "$INSTALL_PARU" == "S" ]] || { detalle "Paru: omitido por configuracion"; return 0; }
+  local base="/home/$USER_NAME/Repos"
+  mkdir -p "$base"; chown "$USER_NAME:$USER_NAME" "$base"
+  if [[ -d "$base/Paru/.git" ]]; then
+    detalle "Paru ya esta clonado: se actualiza"
+    runuser -u "$USER_NAME" -- bash -lc 'cd ~/Repos/Paru && git pull -q' || true
   else
-    warn "nmcli no disponible, se omitira la IP fija."
+    runuser -u "$USER_NAME" -- bash -lc 'rm -rf ~/Repos/Paru && git clone --depth=1 https://aur.archlinux.org/paru-bin.git ~/Repos/Paru' \
+      || { warn "No se pudo clonar paru-bin"; return 0; }
+  fi
+  runuser -u "$USER_NAME" -- bash -lc 'cd ~/Repos/Paru && makepkg -si --noconfirm' \
+    || warn "No se pudo compilar Paru"
+  if command -v paru >/dev/null 2>&1; then
+    paru --version 2>/dev/null | head -n1 | sed 's/^/       /' || true
+    ok "Paru instalado."
+  else
+    warn "Paru no quedo disponible."
   fi
 }
 
-instalar_grub() {
-  info "Instalando GRUB..."
+ch_blackarch() {
+  [[ "$INSTALL_BLACKARCH" == "S" ]] || { detalle "BlackArch: omitido por configuracion"; return 0; }
+  local dir="/home/$USER_NAME/Repos/Blackarch"
+  mkdir -p "$dir"; chown "$USER_NAME:$USER_NAME" "$dir"
+  ( cd "$dir" && curl -fsSL -o strap.sh https://blackarch.org/strap.sh && chmod +x strap.sh && ./strap.sh -y ) \
+    || warn "No se pudieron agregar los repositorios BlackArch"
+  [[ -f /etc/pacman.d/blackarch-mirrorlist ]] && ok "Repositorios BlackArch agregados."
+  return 0
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 5/10 · ENTORNO GRAFICO
+# ────────────────────────────────────────────────────────────────────────────
+ch_paquetes_gui() {
+  local pkgs=(kitty firefox neovim imagemagick rofi dunst
+              ttf-material-design-icons zsh-syntax-highlighting zsh-autosuggestions
+              pipewire pipewire-pulse wireplumber alsa-utils pavucontrol
+              acpi acpid acpi_call wireless_tools jq inotify-tools polkit-gnome
+              xdotool xclip xsel maim brightnessctl redshift lm_sensors
+              mpd mpc ncmpcpp playerctl ffmpeg bluez-utils nautilus ranger
+              gnome-settings-daemon python-mutagen fontconfig
+              seatd libinput xorg-xdpyinfo xorg-xprop numlockx)
+  pacman -S --needed --noconfirm "${pkgs[@]}" >/dev/null 2>&1 \
+    || warn "Algunos paquetes graficos no se instalaron (revisar el log)."
+  ok "Paquetes del entorno grafico instalados."
+}
+
+ch_awesome() {
+  if command -v paru >/dev/null 2>&1; then
+    # awesome-git y picom-git vienen del AUR; si fallan se usan los oficiales.
+    runuser -u "$USER_NAME" -- bash -lc 'paru -S --needed --noconfirm awesome-git picom-git todo-bin mpdris2' \
+      || warn "AUR (awesome-git/picom-git) no disponible; se instalan las versiones oficiales."
+  fi
+  if ! command -v awesome >/dev/null 2>&1; then
+    pacman -S --needed --noconfirm awesome picom >/dev/null 2>&1 || warn "No se pudo instalar AwesomeWM"
+  fi
+  pacman -S --needed --noconfirm picom >/dev/null 2>&1 || true
+  pacman -S --needed --noconfirm mpdris2 >/dev/null 2>&1 || true
+  command -v awesome >/dev/null 2>&1 && ok "AwesomeWM disponible ($(awesome --version 2>/dev/null | head -n1))" \
+    || warn "AwesomeWM no quedo instalado."
+}
+
+ch_teclado_x11() {
+  # Sin esto, el teclado en el entorno grafico no produce acentos ni simbolos.
+  mkdir -p /etc/X11/xorg.conf.d
+  cat > /etc/X11/xorg.conf.d/00-keyboard.conf <<EOF
+Section "InputClass"
+	Identifier "system-keyboard"
+	MatchIsKeyboard "on"
+	Option "XkbLayout" "${XKBLAYOUT:-latam}"
+	Option "XkbModel" "pc105"
+	Option "XkbOptions" "terminate:ctrl_alt_bksp"
+EndSection
+EOF
+  localectl set-x11-keymap "${XKBLAYOUT:-latam}" pc105 >/dev/null 2>&1 || true
+  ok "Disposicion X11: ${XKBLAYOUT:-latam} (acentos y simbolos en el escritorio)"
+}
+
+ch_lightdm() {
+  systemctl enable lightdm.service
+  systemctl enable seatd.service 2>/dev/null || true
+  if [[ -f /etc/lightdm/lightdm.conf ]]; then
+    sed -i 's/^#\?greeter-session\s*=.*/greeter-session=lightdm-slick-greeter/' /etc/lightdm/lightdm.conf
+    grep -q '^greeter-session=' /etc/lightdm/lightdm.conf \
+      || echo 'greeter-session=lightdm-slick-greeter' >> /etc/lightdm/lightdm.conf
+  fi
+  # Cargar el .profile/.xprofile del usuario en la sesion grafica.
+  if ! grep -q 'HOME/.profile' /etc/lightdm/Xsession 2>/dev/null; then
+    sed -i '/\.xprofile/a[ -f "$HOME/.profile" ] \&\& . "$HOME/.profile"' /etc/lightdm/Xsession 2>/dev/null || true
+  fi
+  # Sesion de AwesomeWM para el selector de LightDM.
+  if [[ ! -f /usr/share/xsessions/awesome.desktop ]]; then
+    cat > /usr/share/xsessions/awesome.desktop <<'EOF'
+[Desktop Entry]
+Name=Awesome
+Comment=Awesome Window Manager
+Exec=awesome
+Type=Application
+EOF
+  fi
+  ok "LightDM + slick-greeter configurados."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 6/10 · PERSONALIZACION (repo SrSancen/Predatox)
+# ────────────────────────────────────────────────────────────────────────────
+# Descarga el repositorio de personalizacion. Devuelve 0 si lo logro.
+# Orden de intento: tarball (rama main, luego master) y, si no, git clone;
+# se prueban primero las URLs nuevas (SrSancen/Predatox) y despues el
+# repositorio anterior como respaldo.
+descargar_personalizacion() {
+  local destino="$1" tmp rama repo
+  [[ -d "$destino" ]] || mkdir -p "$destino" || return 1
+
+  for repo in "${REPO_USUARIO}/${REPO_NOMBRE}" "${REPO_ALT_USUARIO}/${REPO_ALT_NOMBRE}"; do
+    for rama in $REPO_RAMAS; do
+      tmp="$(mktemp)"
+      info "Descargando ${repo} (rama ${rama})..."
+      if curl -fsSL --retry 2 --max-time 300 -o "$tmp" \
+           "https://codeload.github.com/${repo}/tar.gz/refs/heads/${rama}" 2>/dev/null \
+         && tar -tzf "$tmp" >/dev/null 2>&1; then
+        rm -rf "${destino:?}/"* 2>/dev/null || true
+        if tar -xzf "$tmp" -C "$destino" --strip-components=1 2>/dev/null; then
+          rm -f "$tmp"
+          ok "Personalizacion descargada de ${repo} (rama ${rama})."
+          return 0
+        fi
+      fi
+      rm -f "$tmp"
+    done
+    # Respaldo: clonar el repositorio completo.
+    info "Sin tarball de ${repo}: intentando git clone..."
+    if git clone --depth=1 "https://github.com/${repo}.git" "${destino}.tmp" >/dev/null 2>&1; then
+      rm -rf "${destino:?}/"* 2>/dev/null || true
+      cp -a "${destino}.tmp/." "$destino/" 2>/dev/null || true
+      rm -rf "${destino}.tmp"
+      ok "Personalizacion clonada de ${repo}."
+      return 0
+    fi
+    rm -rf "${destino}.tmp" 2>/dev/null || true
+  done
+  return 1
+}
+
+# Descarga un archivo suelto del repo cuando no se pudo el tarball.
+asegurar_archivo() { # <destino> <ruta dentro del repo>
+  local dest="$1" rel="$2"
+  [[ -s "$dest" ]] && return 0
+  mkdir -p "$(dirname "$dest")" 2>/dev/null || true
+  local rama
+  for rama in $REPO_RAMAS; do
+    if curl -fsSL --retry 2 -o "$dest" "${RAW_BASE}/${rama}/${rel}" 2>/dev/null && [[ -s "$dest" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Localiza la carpeta ConfigFiles sin depender de la ruta exacta.
+localizar_configfiles() { # <raiz>
+  local raiz="$1" c
+  for c in "$raiz/ConfigFiles" "$raiz" "$raiz/ArchInstall" "$raiz/ConfigFiles/ConfigFiles"; do
+    if [[ -d "$c/config" || -d "$c/bin" || -d "$c/misc" || -d "$c/images" || -d "$c/grub" ]]; then
+      printf '%s' "$c"
+      return 0
+    fi
+  done
+  c="$(find "$raiz" -maxdepth 4 -type d -name 'ConfigFiles' -print -quit 2>/dev/null)"
+  if [[ -n "$c" ]]; then printf '%s' "$c"; return 0; fi
+  return 1
+}
+
+# Localiza la carpeta ConfigFiles dentro del chroot. Cada paso lo busca por su
+# cuenta en vez de recibir la ruta de uno solo: asi da igual el orden en que se
+# ejecuten, y si la personalizacion se descarga mas tarde los pasos siguientes
+# la encuentran igualmente.
+configfiles_de() { # [ruta]  ->  imprime la ruta de ConfigFiles
+  local base="${1:-${DESTINO_REPO:-}}" cf=""
+  [[ -n "$base" ]] || base="/home/$USER_NAME/Repos/Predatox"
+  cf="$(localizar_configfiles "$base" 2>/dev/null)" || return 1
+  [[ -d "$cf" ]] || return 1
+  printf '%s' "$cf"
+}
+
+ch_descargar_personalizacion() {
+  DESTINO_REPO="/home/$USER_NAME/Repos/Predatox"
+  mkdir -p "$(dirname "$DESTINO_REPO")" "/home/$USER_NAME/Repos"
+  chown "$USER_NAME:$USER_NAME" "/home/$USER_NAME/Repos" 2>/dev/null || true
+  if [[ -d "$DESTINO_REPO" ]] && localizar_configfiles "$DESTINO_REPO" >/dev/null 2>&1; then
+    detalle "La personalizacion ya estaba descargada."
+    return 0
+  fi
+  if descargar_personalizacion "$DESTINO_REPO"; then
+    chown -R "$USER_NAME:$USER_NAME" "$DESTINO_REPO" 2>/dev/null || true
+    return 0
+  fi
+  warn "No se pudo descargar ${REPO_USUARIO}/${REPO_NOMBRE}."
+  detalle "El escritorio se instalara sin personalizacion; el resto del sistema funciona igual."
+  return 1
+}
+
+ch_copiar_config() {
+  local U="$USER_NAME" CF
+  local H="/home/$U"
+  CF="$(configfiles_de)" || { detalle "Sin carpeta ConfigFiles: se omite la personalizacion."; return 0; }
+  ok "ConfigFiles localizado en $CF"
+
+  mkdir -p "$H/Documents" "$H/Downloads" "$H/Music" "$H/Pictures" \
+           "$H/.local/bin" "$H/.config" "$H/Repos" /usr/share/backgrounds /usr/share/zsh-sudo
+  touch "$H/Documents/todo"
+
+  # Configuraciones de awesome, binarios y miscelaneos (los archivos ocultos
+  # se copian gracias a "cp -rf dir/.").
+  [[ -d "$CF/config" ]] && cp -rf "$CF/config/." "$H/.config/"
+  [[ -d "$CF/bin"    ]] && cp -rf "$CF/bin/." "$H/.local/bin/"
+  [[ -d "$CF/misc"   ]] && cp -rf "$CF/misc/." "$H/"
+
+  # Respaldo: si faltaron los archivos sueltos se piden uno por uno.
+  asegurar_archivo "$H/.zshrc"            "ConfigFiles/misc/.zshrc"            || true
+  asegurar_archivo "$H/.p10k.zsh_user"    "ConfigFiles/misc/.p10k.zsh_user"    || true
+  asegurar_archivo "$H/.p10k.zsh_root"    "ConfigFiles/misc/.p10k.zsh_root"    || true
+  asegurar_archivo "$H/sudo.plugin.zsh"   "ConfigFiles/misc/sudo.plugin.zsh"   || true
+  asegurar_archivo "$H/slick-greeter.conf" "ConfigFiles/misc/slick-greeter.conf" || true
+
+  chown -R "$U:$U" "$H" 2>/dev/null || true
+  ok "Configuraciones copiadas al home de $U"
+}
+
+ch_tema_grub() {
+  local CF H="/home/$USER_NAME"
+  CF="$(configfiles_de "${1:-}")" || { detalle "Sin tema GRUB en el repositorio: se deja el tema estandar."; return 0; }
+  if [[ ! -d "$CF/grub/HackTheBox" ]]; then
+    detalle "Sin tema GRUB en el repositorio: se deja el tema estandar."
+    return 0
+  fi
+  mkdir -p /boot/grub/themes
+  rm -rf /boot/grub/themes/HackTheBox
+  cp -rf "$CF/grub/HackTheBox" /boot/grub/themes/HackTheBox
+  WALLPAPER_GRUB="$(elegir_wallpaper /boot/grub/themes/HackTheBox "background")" || WALLPAPER_GRUB=""
+  if [[ -n "$WALLPAPER_GRUB" ]]; then
+    mv -f "/boot/grub/themes/HackTheBox/$WALLPAPER_GRUB" /boot/grub/themes/HackTheBox/background.png
+  fi
+  # No se fija gfxmode: en VMs con EFI un modo no soportado deja pantalla negra.
+  sed -i 's|^desktop-image:.*|desktop-image: "background.png"|' /boot/grub/themes/HackTheBox/theme.txt 2>/dev/null || true
+
+  if [[ -s /boot/grub/themes/HackTheBox/background.png && -f /boot/grub/themes/HackTheBox/theme.txt ]]; then
+    sed -i 's/^#GRUB_THEME=.*/GRUB_THEME="\/boot\/grub\/themes\/HackTheBox\/theme.txt"/' /etc/default/grub 2>/dev/null || true
+    grep -q '^GRUB_THEME=' /etc/default/grub \
+      || echo 'GRUB_THEME="/boot/grub/themes/HackTheBox/theme.txt"' >> /etc/default/grub
+    ok "Tema GRUB HackTheBox aplicado."
+  else
+    warn "Fondo del tema GRUB invalido: se usa GRUB estandar (menu de texto)."
+    sed -i 's/^GRUB_THEME=.*/#GRUB_THEME="\/boot\/grub\/themes\/HackTheBox\/theme.txt"/' /etc/default/grub 2>/dev/null || true
+    rm -rf /boot/grub/themes/HackTheBox 2>/dev/null || true
+  fi
+  return 0
+}
+
+ch_wallpapers() {
+  local CF H="/home/$USER_NAME"
+  CF="$(configfiles_de "${1:-}")" || CF=""
+  [[ -n "$CF" && -d "$CF/images" ]] && cp -rf "$CF/images/." /usr/share/backgrounds/
+  if ! ls /usr/share/backgrounds/*.{png,jpg,jpeg,PNG,JPG} >/dev/null 2>&1; then
+    detalle "No hay wallpapers en el repositorio: se deja el fondo de LightDM por defecto."
+    return 0
+  fi
+  # Fondo del login (slick-greeter)
+  WALLPAPER_LOGIN="$(elegir_wallpaper /usr/share/backgrounds)" || WALLPAPER_LOGIN=""
+  if [[ -f /etc/lightdm/slick-greeter.conf ]]; then
+    if [[ -n "$WALLPAPER_LOGIN" ]]; then
+      sed -i "s|^background=.*|background=/usr/share/backgrounds/${WALLPAPER_LOGIN}|" /etc/lightdm/slick-greeter.conf
+    else
+      sed -i 's|^background=.*|background=/usr/share/backgrounds/PredatorLogin.jpg|' /etc/lightdm/slick-greeter.conf
+    fi
+  fi
+  # Fondo del escritorio (awesome usa theme/assets/bg.png)
+  WALLPAPER_USUARIO="$(elegir_wallpaper /usr/share/backgrounds)" || WALLPAPER_USUARIO=""
+  if [[ -n "$WALLPAPER_USUARIO" ]]; then
+    mkdir -p "$H/.config/awesome/theme/assets"
+    cp -f "/usr/share/backgrounds/$WALLPAPER_USUARIO" "$H/.config/awesome/theme/assets/bg.png"
+  fi
+  chmod 744 "$H/.config/awesome/configuration/autostart" 2>/dev/null || true
+  ok "Wallpapers: login=${WALLPAPER_LOGIN:-default} usuario=${WALLPAPER_USUARIO:-default} grub=${WALLPAPER_GRUB:-default}"
+}
+
+ch_fuentes() {
+  local CF H="/home/$USER_NAME"
+  CF="$(configfiles_de "${1:-}")" || { detalle "Sin fonts.zip en el repositorio."; return 0; }
+  [[ -f "$CF/fonts/fonts.zip" ]] || { detalle "Sin fonts.zip en el repositorio."; return 0; }
+  rm -rf "$H/Downloads/descomprimidas"
+  cp -f "$CF/fonts/fonts.zip" "$H/Downloads/fonts.zip"
+  unzip -o -q "$H/Downloads/fonts.zip" -d "$H/Downloads/descomprimidas" 2>/dev/null || warn "No se pudo descomprimir fonts.zip"
+  local n=0 ttf
+  for ttf in "$H"/Downloads/descomprimidas/*.ttf "$H"/Downloads/*.ttf; do
+    [[ -f "$ttf" ]] || continue
+    cp -f "$ttf" /usr/share/fonts/ && n=$(( n + 1 ))
+  done
+  rm -rf "$H/Downloads/fonts.zip" "$H/Downloads/descomprimidas"
+  fc-cache -f >/dev/null 2>&1 || true
+  ok "Fuentes instaladas: $n archivos ttf"
+}
+
+ch_zsh() {
+  local H="/home/$USER_NAME"
+  usermod --shell /usr/bin/zsh "$USER_NAME"
+  grep -q "TODO_PATH" "$H/.zshrc" 2>/dev/null || echo 'export TODO_PATH="Documents/todo"' >> "$H/.zshrc" 2>/dev/null || true
+  [[ -f "$H/.p10k.zsh_user" ]] && mv -f "$H/.p10k.zsh_user" "$H/.p10k.zsh"
+  [[ -f "$H/sudo.plugin.zsh" ]] && mv -f "$H/sudo.plugin.zsh" /usr/share/zsh-sudo/
+  [[ -f "$H/slick-greeter.conf" ]] && mv -f "$H/slick-greeter.conf" /etc/lightdm/
+  chown -R "$USER_NAME:$USER_NAME" /usr/share/zsh-sudo 2>/dev/null || true
+  mkdir -p /usr/share/zsh-sudo/themes 2>/dev/null || true
+  ok "zsh como shell de $USER_NAME · powerlevel10k preparado"
+}
+
+ch_fzf() {
+  local H="/home/$USER_NAME"
+  if [[ ! -d "$H/Repos/fzf" ]]; then
+    runuser -u "$USER_NAME" -- bash -lc 'git clone --depth=1 https://github.com/junegunn/fzf.git ~/Repos/fzf' || true
+  fi
+  [[ -x "$H/Repos/fzf/install" ]] && runuser -u "$USER_NAME" -- bash -lc 'cd ~/Repos/fzf && ./install --all' >/dev/null 2>&1
+  [[ -x /usr/bin/fzf ]] && ok "fzf instalado." || warn "fzf no quedo instalado."
+}
+
+ch_nvim() {
+  local H="/home/$USER_NAME"
+  if [[ ! -d "$H/.config/nvim" ]]; then
+    runuser -u "$USER_NAME" -- bash -lc 'git clone https://github.com/NvChad/starter ~/.config/nvim' || true
+  fi
+  [[ -d "$H/.config/nvim" ]] && ok "Configuracion de Neovim (NvChad) lista." || warn "No se pudo clonar NvChad."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 7/10 · ENTORNO DE ROOT
+# ────────────────────────────────────────────────────────────────────────────
+ch_root_shell() {
+  local H="/home/$USER_NAME"
+  usermod --shell /usr/bin/zsh root
+  if [[ -f "$H/.zshrc" ]]; then
+    ln -sf "$H/.zshrc" /root/.zshrc
+  else
+    [[ -f /etc/skel/.zshrc ]] && cp -f /etc/skel/.zshrc /root/.zshrc
+  fi
+  grep -q "TODO_PATH" /root/.zshrc 2>/dev/null || echo 'export TODO_PATH="/home/'"$USER_NAME"'/Documents/todo"' >> /root/.zshrc 2>/dev/null || true
+  ok "root usa zsh con la configuracion de $USER_NAME"
+}
+
+ch_root_powerlevel() {
+  local H="/home/$USER_NAME"
+  if [[ ! -d /root/Repos/powerlevel10k && -d "$H/Repos/powerlevel10k" ]]; then
+    cp -a "$H/Repos/powerlevel10k" /root/Repos/powerlevel10k 2>/dev/null || true
+  fi
+  if [[ ! -d /root/Repos/powerlevel10k ]]; then
+    git clone --depth=1 https://github.com/romkatv/powerlevel10k.git /root/Repos/powerlevel10k >/dev/null 2>&1 || true
+  fi
+  if [[ -f "$H/.p10k.zsh_root" ]]; then
+    cp -f "$H/.p10k.zsh_root" /root/.p10k.zsh
+  elif [[ -f "$H/.p10k.zsh" ]]; then
+    cp -f "$H/.p10k.zsh" /root/.p10k.zsh
+  fi
+  [[ -s /root/.p10k.zsh ]] && ok "powerlevel10k configurado para root." || warn "Sin .p10k.zsh para root."
+}
+
+ch_root_nvim_fzf() {
+  local H="/home/$USER_NAME"
+  [[ -d "$H/.config/nvim" && ! -d /root/.config/nvim ]] && cp -a "$H/.config/nvim" /root/.config/nvim
+  [[ -x /usr/bin/fzf ]] && ln -sf /usr/bin/fzf /root/.local/bin/fzf 2>/dev/null || true
+  [[ -f /usr/share/zsh-sudo/sudo.plugin.zsh ]] && ok "fzf y nvim disponibles para root." || true
+  return 0
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 8/10 · GRUB Y SERVICIOS
+# ────────────────────────────────────────────────────────────────────────────
+ch_grub() {
   if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --recheck
+    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --recheck \
+      || warn "grub-install (UEFI) reporto avisos; se regenerara la configuracion."
   else
-    grub-install --target=i386-pc "$DISK"
+    grub-install --target=i386-pc "$DISK" || warn "grub-install (BIOS) reporto avisos."
   fi
-  grub-mkconfig -o /boot/grub/grub.cfg
-  ok "GRUB instalado y configurado."
+  ok "GRUB instalado en $BOOT_MODE"
 }
 
-habilitar_servicios() {
-  info "Habilitando servicios del sistema..."
+ch_servicios() {
   systemctl enable NetworkManager.service
   systemctl enable wpa_supplicant.service 2>/dev/null || true
   systemctl enable sshd.service
+  systemctl enable systemd-resolved.service 2>/dev/null || true
   case "$VIRTUALIZER" in
     vmware)     systemctl enable vmtoolsd.service ;;
     virtualbox) systemctl enable vboxservice.service ;;
   esac
   if [[ "$INSTALL_GUI" == "S" ]]; then
-    systemctl enable lightdm.service
-    # Seleccionar lightdm-slick-greeter
-    sed -i 's/^#greeter-session=.*/greeter-session=lightdm-slick-greeter/' /etc/lightdm/lightdm.conf
-    if [[ -f /etc/lightdm/lightdm.conf ]] && ! grep -q "^greeter-session=" /etc/lightdm/lightdm.conf; then
-      echo "greeter-session=lightdm-slick-greeter" >> /etc/lightdm/lightdm.conf
-    fi
-    # Agregar .profile a la lista de sesiones disponibles (insertar tras la
-    # linea de .xprofile). Se evitan sed con \n que pueden corromper Xsession.
-    sed -i '/\.xprofile/a[ -f "$HOME/.profile" ] \&\& . "$HOME/.profile"' \
-      /etc/lightdm/Xsession 2>/dev/null || true
+    systemctl enable acpid.service 2>/dev/null || true
+    systemctl --global enable mpd.service 2>/dev/null || true   # mpd para el usuario
   fi
-  # Grupos de audio (pipewire)
-  usermod -aG audio "$USER_NAME" 2>/dev/null || true
-  ok "Servicios habilitados."
+  ok "Servicios habilitados: NetworkManager, sshd, wpa_supplicant"
+  [[ "$INSTALL_GUI" == "S" ]] && detalle "Ademas: lightdm, acpid y mpd"
+  return 0
 }
 
-instalar_paru() {
-  info "Instalando Paru (AUR helper)..."
-  # Paru no se puede compilar como root: se compila como el usuario creado.
-  # Para automatizar makepkg -si habilitamos sudo sin contrasena temporalmente.
-  echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/90-instalacion_predatox
-  chmod 440 /etc/sudoers.d/90-instalacion_predatox
-
-  mkdir -p "/home/${USER_NAME}/Repos"
-  chown "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/Repos"
-  runuser -u "$USER_NAME" -- bash -lc 'git clone https://aur.archlinux.org/paru-bin.git ~/Repos/Paru' \
-    && (cd "/home/${USER_NAME}/Repos/Paru" && runuser -u "$USER_NAME" -- bash -lc 'cd ~/Repos/Paru && makepkg -si --noconfirm') \
-    || warn "No se pudo instalar Paru."
-  command -v paru >/dev/null 2>&1 && ok "Paru instalado correctamente." || warn "Paru no disponible."
+ch_grub_mkconfig() {
+  grub-mkconfig -o /boot/grub/grub.cfg || warn "grub-mkconfig reporto avisos"
+  [[ -s /boot/grub/grub.cfg ]] && ok "Menu de arranque regenerado."
 }
 
-instalar_blackarch() {
-  info "Agregando repositorios BlackArch..."
-  mkdir -p "/home/${USER_NAME}/Repos/Blackarch"
-  chown "${USER_NAME}:${USER_NAME}" "/home/${USER_NAME}/Repos/Blackarch"
-  (cd "/home/${USER_NAME}/Repos/Blackarch" \
-    && curl -O https://blackarch.org/strap.sh \
-    && chmod +x strap.sh && ./strap.sh -y) \
-    || warn "No se pudieron agregar los repositorios BlackArch."
-}
-
-instalar_paquetes_gui() {
-  info "Instalando paquetes del entorno grafico AwesomeWM..."
-  local gui_pkgs=(kitty firefox neovim imagemagick rofi dunst
-                  ttf-material-icons zsh-syntax-highlighting zsh-autosuggestions
-                  pipewire pipewire-pulse wireplumber alsa-utils alsa-tools
-                  acpi acpid acpi_call wireless_tools jq inotify-tools polkit-gnome
-                  xdotool xclip maim brightnessctl redshift lm_sensors
-                  mpd mpc ncmpcpp playerctl ffmpeg bluez-utils nautilus
-                  gnome-settings-daemon python-mutagen fontconfig)
-  pacman -S --needed --noconfirm "${gui_pkgs[@]}" || warn "Hubo paquetes GUI que no se instalaron."
-  if command -v paru >/dev/null 2>&1; then
-    # awesome-git/picom-git/mpdris2 provienen de AUR y reemplazan a los oficiales.
-    runuser -u "$USER_NAME" -- bash -lc 'paru -S --needed --noconfirm awesome-git picom-git todo-bin mpdris2' \
-      && ok "Versiones de AUR (awesome-git, picom-git) instaladas." \
-      || {
-        warn "No se pudieron instalar awesome-git/picom-git; instalando versiones oficiales."
-        pacman -S --needed --noconfirm awesome picom mpdris2 2>/dev/null || pacman -S --needed --noconfirm awesome picom
-      }
-  else
-    pacman -S --needed --noconfirm awesome picom
-  fi
-  systemctl enable acpid.service 2>/dev/null || true
-  systemctl enable mpd.service 2>/dev/null || true
-  usermod -aG audio "$USER_NAME" 2>/dev/null || true
-  ok "Entorno grafico instalado."
-}
-
-instalar_pentest() {
-  info "Instalando herramientas de pentesting..."
-  # whatweb y burpsuite solo existen en AUR/BlackArch; el resto en repos oficiales.
-  pacman -S --needed --noconfirm exploitdb inetutils nmap \
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 9/10 · PENTEST
+# ────────────────────────────────────────────────────────────────────────────
+ch_pentest() {
+  [[ "$INSTALL_PENTEST" == "S" ]] || { detalle "Pentest: omitido por configuracion."; return 0; }
+  pacman -S --needed --noconfirm exploitdb inetutils nmap >/dev/null 2>&1 \
     || warn "Algunas herramientas de pentesting no se instalaron."
   if command -v paru >/dev/null 2>&1; then
-    runuser -u "$USER_NAME" -- bash -lc 'paru -S --needed --noconfirm whatweb burpsuite' \
+    runuser -u "$USER_NAME" -- bash -lc 'paru -S --needed --noconfirm whatweb burpsuite' >/dev/null 2>&1 \
       || warn "whatweb/burpsuite (AUR) no se instalaron."
   fi
+  ok "Herramientas de pentesting instaladas."
 }
 
-personalizar_entorno() {
-  [[ "$INSTALL_GUI" == "S" ]] || return 0
-  info "Personalizando el entorno (AwesomeWM, zsh, wallpapers, grub theme)..."
-  local U="$USER_NAME"
-  local HOMEU="/home/$U"
-  local CF="$HOMEU/Repos/AwesomeWM/ConfigFiles"
-
-  mkdir -p "$HOMEU/Documents" "$HOMEU/Downloads" "$HOMEU/Music" "$HOMEU/Pictures" \
-           "$HOMEU/.local/bin" "$HOMEU/Repos" /usr/share/backgrounds /usr/share/zsh-sudo
-
-  # Agregar export TODO_PATH
-  grep -q "TODO_PATH" "$HOMEU/.zshrc" 2>/dev/null || \
-    echo 'export TODO_PATH="Documents/todo"' >> "$HOMEU/.zshrc" 2>/dev/null || true
-
-  # Descargar el repo base de personalizacion por tarball (sin git).
-  # Si ya existe el contenido, no se vuelve a bajar.
-  if [[ ! -d "$HOMEU/Repos/AwesomeWM/ConfigFiles" ]]; then
-    info "Descargando archivos de personalizacion (${AWESOME_USER}/AwesomeWM)..."
-    local tmp_tar
-    tmp_tar="$(mktemp)"
-    mkdir -p "$HOMEU/Repos/AwesomeWM"
-    if ! curl -fsSL -o "$tmp_tar" "$AWESOME_DL"; then
-      warn "No se pudo descargar el repositorio AwesomeWM personalizado."
-    elif ! tar -xzf "$tmp_tar" -C "$HOMEU/Repos/AwesomeWM" --strip-components=1 2>/dev/null; then
-      warn "No se pudo descomprimir el repositorio AwesomeWM personalizado."
-    else
-      chown -R "${U}:${U}" "$HOMEU/Repos/AwesomeWM" 2>/dev/null || true
-      ok "Personalizacion descargada."
-    fi
-    rm -f "$tmp_tar"
-  fi
-
-  if [[ -d "$CF" ]]; then
-    # Configuraciones de awesome / binarios / miscelaneos
-    [[ -d "$CF/config" ]] && cp -rf "$CF/config/." "$HOMEU/.config/"
-    [[ -d "$CF/bin" ]]    && cp -rf "$CF/bin/." "$HOMEU/.local/bin/"
-    [[ -d "$CF/misc" ]]   && cp -rf "$CF/misc/." "$HOMEU/"
-
-    # Tema GRUB HackTheBox + wallpaper aleatorio (con fallback seguro)
-    if [[ -d "$CF/grub/HackTheBox" ]]; then
-      mkdir -p /boot/grub/themes
-      cp -rf "$CF/grub/HackTheBox" "/boot/grub/themes/HackTheBox"
-      WALLPAPER_GRUB="$(elegir_wallpaper "/boot/grub/themes/HackTheBox" "background")"
-      if [[ -n "$WALLPAPER_GRUB" ]]; then
-        mv -f "/boot/grub/themes/HackTheBox/$WALLPAPER_GRUB" /boot/grub/themes/HackTheBox/background.png
-      fi
-      # No forzar una resolucion fija: en VMs con EFI un gfxmode no
-      # soportado provoca pantalla negra al reiniciar (se mantiene auto).
-      sed -i "s|^desktop-image:.*|desktop-image: \"background.png\"|" /boot/grub/themes/HackTheBox/theme.txt 2>/dev/null || true
-      # Solo aplicar el tema si el fondo quedo valido; de lo contrario GRUB
-      # estandar (texto) para garantizar que el menu siempre se muestre.
-      if [[ -s /boot/grub/themes/HackTheBox/background.png \
-            && -f /boot/grub/themes/HackTheBox/theme.txt ]]; then
-        sed -i 's/^#GRUB_THEME=.*/GRUB_THEME="\/boot\/grub\/themes\/HackTheBox\/theme.txt"/' \
-              /etc/default/grub 2>/dev/null || true
-        grep -q "^GRUB_THEME=" /etc/default/grub || \
-          echo 'GRUB_THEME="/boot/grub/themes/HackTheBox/theme.txt"' >> /etc/default/grub
-        ok "Tema GRUB HackTheBox aplicado."
-      else
-        warn "Tema GRUB omitido (fondo invalido); se usara GRUB estandar."
-        sed -i 's/^GRUB_THEME=.*/#GRUB_THEME="\/boot\/grub\/themes\/HackTheBox\/theme.txt"/' \
-              /etc/default/grub 2>/dev/null || true
-        rm -rf /boot/grub/themes/HackTheBox 2>/dev/null || true
-      fi
-    fi
-
-    # Wallpapers al sistema
-    if [[ -d "$CF/images" ]]; then
-      cp -rf "$CF/images/." /usr/share/backgrounds/
-    fi
-
-    # Fuentes
-    if [[ -f "$CF/fonts/fonts.zip" ]]; then
-      cp -f "$CF/fonts/fonts.zip" "$HOMEU/Downloads/fonts.zip"
-      (cd "$HOMEU/Downloads" && unzip -o fonts.zip -d descomprimidas) 2>/dev/null || true
-      find "$HOMEU/Downloads/descomprimidas" -name "*.ttf" -exec mv -f {} /usr/share/fonts/ \; 2>/dev/null || true
-      rm -rf "$HOMEU"/Downloads/* 2>/dev/null || true
-      fc-cache -fv >/dev/null 2>&1 || true
-    fi
-
-    # Powerlevel10k (usuario)
-    if [[ ! -d "$HOMEU/Repos/powerlevel10k" ]]; then
-      runuser -u "$U" -- bash -lc 'git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ~/Repos/powerlevel10k' \
-        || true
-    fi
-    [[ -f "$HOMEU/.p10k.zsh_user" ]] && mv -f "$HOMEU/.p10k.zsh_user" "$HOMEU/.p10k.zsh" || true
-    [[ -f "$HOMEU/sudo.plugin.zsh" ]] && mv -f "$HOMEU/sudo.plugin.zsh" /usr/share/zsh-sudo/ || true
-    [[ -f "$HOMEU/slick-greeter.conf" ]] && mv -f "$HOMEU/slick-greeter.conf" /etc/lightdm/ || true
-
-    # Wallpaper login (LightDM) aleatorio. Se corrige ademas el glob "*"
-    # literal que trae slick-greeter.conf por una ruta real a la imagen.
-    WALLPAPER_LOGIN="$(elegir_wallpaper /usr/share/backgrounds)"
-    if [[ -n "$WALLPAPER_LOGIN" ]]; then
-      sed -i "s|^background=.*|background=/usr/share/backgrounds/${WALLPAPER_LOGIN}|" /etc/lightdm/slick-greeter.conf 2>/dev/null || true
-    else
-      sed -i "s|^background=.*|background=/usr/share/backgrounds/PredatorLogin.jpg|" /etc/lightdm/slick-greeter.conf 2>/dev/null || true
-    fi
-
-    # Wallpaper usuario (awesome) aleatorio
-    WALLPAPER_USUARIO="$(elegir_wallpaper /usr/share/backgrounds)"
-    if [[ -n "$WALLPAPER_USUARIO" ]]; then
-      mkdir -p "$HOMEU/.config/awesome/theme/assets"
-      cp -f "/usr/share/backgrounds/$WALLPAPER_USUARIO" "$HOMEU/.config/awesome/theme/assets/bg.png"
-    fi
-
-    chmod 744 "$HOMEU/.config/awesome/configuration/autostart" 2>/dev/null || true
-    ok "Configuraciones del entorno copiadas."
-    info "Wallpapers elegidos al azar: login=$WALLPAPER_LOGIN usuario=$WALLPAPER_USUARIO grub=$WALLPAPER_GRUB"
-  else
-    warn "El repositorio AwesomeWM personalizado no estaba disponible; se omitio la personalizacion."
-  fi
-
-  # Zsh como shell del usuario
-  usermod --shell /usr/bin/zsh "$U"
-
-  # Fzf (selector difuso para el historial de comandos)
-  if [[ ! -d "$HOMEU/Repos/fzf" ]]; then
-    runuser -u "$U" -- bash -lc 'git clone --depth 1 https://github.com/junegunn/fzf.git ~/Repos/fzf' \
-      && runuser -u "$U" -- bash -lc 'cd ~/Repos/fzf && ./install --all' \
-      || warn "No se pudo instalar fzf."
-  fi
-
-  # NvChad (configuracion para neovim)
-  if [[ ! -d "$HOMEU/.config/nvim" ]]; then
-    runuser -u "$U" -- bash -lc 'git clone https://github.com/NvChad/starter ~/.config/nvim' \
-      || warn "No se pudo configurar NvChad."
-  fi
-
-  chown -R "$U:$U" "$HOMEU" 2>/dev/null || true
-  ok "Personalizacion del entorno finalizada."
-}
-
-remover_acceso_temporal() {
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ETAPA 10/10 · CIERRE
+# ────────────────────────────────────────────────────────────────────────────
+ch_quitar_nopasswd() {
   rm -f /etc/sudoers.d/90-instalacion_predatox
+  if visudo -c >/dev/null 2>&1; then
+    ok "Permisos temporales de sudo retirados."
+  else
+    warn "visudo sigue avisando de /etc/sudoers"
+  fi
 }
 
+ch_permisos() {
+  chown -R "$USER_NAME:$USER_NAME" "/home/$USER_NAME" 2>/dev/null || true
+  chmod 755 "/home/$USER_NAME" 2>/dev/null || true
+  chmod 700 "/root" 2>/dev/null || true
+  # La config con los hashes de contrasena no debe quedar legible por todos.
+  chmod 600 /etc/predatox.conf 2>/dev/null || true
+  ok "Permisos de archivos corregidos."
+}
+
+ch_indice() {
+  updatedb >/dev/null 2>&1 || true
+  ok "Indice de archivos (plocate) actualizado."
+}
+
+ch_log() {
+  mkdir -p /var/log
+  cp -f "$LOG_FILE" /var/log/instalacion_predatox.log 2>/dev/null || true
+  ok "Registro guardado en /var/log/instalacion_predatox.log"
+}
+
+ch_resumen() {
+  echo
+  imprimir_arte "$(arte_escritorio)" || true
+  recuadro "INSTALACION COMPLETADA"
+  echo "    Usuario  : $USER_NAME    (contrasena verificada)"
+  echo "    Hostname : $HOSTNAME"
+  echo "    Entorno  : ${INSTALL_GUI} GUI · ${INSTALL_PARU} Paru · ${INSTALL_BLACKARCH} BlackArch"
+  echo "    Root     : ${ROOT_PASS_HASH:+cifrada SHA-512}"
+  separador
+  echo "    Primer arranque:"
+  echo "      1) Apaga la maquina y RETIRA la ISO de instalacion."
+  echo "      2) Reinicia: entra con $USER_NAME y su contrasena."
+  echo "      3) Crea un SNAPSHOT de respaldo del sistema ya instalado."
+  separador
+  echo "    Extras opcionales:"
+  echo "      * Tema HackTheBox para YouTube (extension Stylus):"
+  echo "        https://github.com/hekatonkheirex/youtube/raw/main/hackthebox.user.css"
+  echo "      * Si picom-git se ve mal: sudo pacman -S picom"
+  separador
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT (punto de entrada dentro de /mnt)
+# ────────────────────────────────────────────────────────────────────────────
 fase_chroot() {
-  # Se ejecuta dentro del sistema instalado (arch-chroot)
+  LOG_FILE="/var/log/instalacion_predatox.log"
   # shellcheck source=/dev/null
   source /etc/predatox.conf
 
-  info "=== FASE CHROOT: Configurando el sistema instalado ==="
+  banner
+  info "FASE CHROOT · configurando el sistema instalado en /mnt"
+  registrar "=== INICIO FASE CHROOT ==="
+  echo
 
-  configurar_sistema
+  # Numero total de etapas de esta fase (segun lo que este habilitado).
+  ETAPA_ACTUAL=0
+  ETAPA_TOTAL=5                                        # 1,2,3 + grub + cierre
+  if [[ "$INSTALL_PARU" == "S" || "$INSTALL_BLACKARCH" == "S" ]]; then
+    ETAPA_TOTAL=$(( ETAPA_TOTAL + 1 ))
+  fi
+  if [[ "$INSTALL_GUI" == "S" ]]; then
+    ETAPA_TOTAL=$(( ETAPA_TOTAL + 3 ))                  # grafico, escritorio, root
+  fi
+  if [[ "$INSTALL_PENTEST" == "S" ]]; then
+    ETAPA_TOTAL=$(( ETAPA_TOTAL + 1 ))
+  fi
 
-  if [[ "$INSTALL_PARU" == "S" ]]; then instalar_paru; else
-    echo "${USER_NAME} ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/90-instalacion_predatox
+  nueva_etapa "CONFIGURACION DEL SISTEMA" "$(arte_linux)"
+  PASO_TOT=5
+  paso "Locale y formato regional"      ch_locale
+  paso "Teclado de consola"             ch_teclado
+  paso "Zona horaria y reloj"           ch_hora
+  paso "Nombre del equipo y /etc/hosts" ch_hostname
+  paso "Configuracion de red"           ch_red
+
+  nueva_etapa "USUARIOS, CONTRASENAS Y SUDO"
+  PASO_TOT=5
+  paso "Contrasena de root"             ch_contrasena_root
+  paso "Crear el usuario $USER_NAME"    ch_usuario
+  paso "Contrasena de $USER_NAME"       ch_contrasena_usuario
+  paso "Grupos del usuario"             ch_grupos
+  paso "Permisos de sudo"               ch_sudoers
+
+  nueva_etapa "PACMAN Y ACTUALIZACION"
+  PASO_TOT=2
+  paso "Optimizar pacman.conf"          ch_pacman_conf
+  paso "Actualizar el sistema base"     ch_actualizar
+
+  if [[ "$INSTALL_PARU" == "S" || "$INSTALL_BLACKARCH" == "S" ]]; then
+    nueva_etapa "PARU (AUR) Y BLACKARCH" "$(arte_paru)"
+    PASO_TOT=2
+    paso "Paru, ayudante del AUR"       ch_paru
+    paso "Repositorios BlackArch"        ch_blackarch
+  else
+    # Sin Paru se necesita sudo sin contrasena para el resto de la instalacion.
+    printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$USER_NAME" > /etc/sudoers.d/90-instalacion_predatox
     chmod 440 /etc/sudoers.d/90-instalacion_predatox
   fi
 
-  if [[ "$INSTALL_GUI" == "S" ]]; then instalar_paquetes_gui; fi
-  if [[ "$INSTALL_BLACKARCH" == "S" ]]; then instalar_blackarch; fi
-  if [[ "$INSTALL_PENTEST" == "S" ]]; then instalar_pentest; fi
+  if [[ "$INSTALL_GUI" == "S" ]]; then
+    nueva_etapa "ENTORNO GRAFICO (AWESOMEWM)" "$(arte_escritorio)"
+    PASO_TOT=4
+    paso "Paquetes de Xorg, audio y utilidades" ch_paquetes_gui
+    paso "AwesomeWM, picom y compositor"        ch_awesome
+    paso "Teclado del escritorio"               ch_teclado_x11
+    paso "LightDM y sesion grafica"             ch_lightdm
 
-  instalar_grub
-  habilitar_servicios
-  personalizar_entorno
+    nueva_etapa "PERSONALIZACION DEL ESCRITORIO"
+    PASO_TOT=8
+    paso "Descargar ${REPO_USUARIO}/${REPO_NOMBRE}"  ch_descargar_personalizacion
+    paso "Copiar configuraciones al home"            ch_copiar_config
+    paso "Tema de GRUB"                              ch_tema_grub
+    paso "Wallpapers (login, escritorio, GRUB)"      ch_wallpapers
+    paso "Fuentes tipograficas"                      ch_fuentes
+    paso "Shell zsh del usuario"                     ch_zsh
+    paso "fzf (historial difuso)"                    ch_fzf
+    paso "Neovim con NvChad"                         ch_nvim
 
-  # Regenerar grub por si cambió el tema/wallpaper
-  grub-mkconfig -o /boot/grub/grub.cfg
+    nueva_etapa "ENTORNO DE ROOT"
+    PASO_TOT=3
+    paso "zsh y .zshrc de root"                ch_root_shell
+    paso "powerlevel10k de root"               ch_root_powerlevel
+    paso "nvim y fzf de root"                  ch_root_nvim_fzf
+  else
+    paso_teclado_x11
+  fi
 
-  remover_acceso_temporal
-  updatedb 2>/dev/null || true
+  nueva_etapa "GRUB Y SERVICIOS"
+  PASO_TOT=3
+  paso "Instalar GRUB ($BOOT_MODE)"      ch_grub
+  paso "Habilitar servicios del sistema" ch_servicios
+  paso "Regenerar el menu de arranque"   ch_grub_mkconfig
 
-  ht_sep
-  ok "SISTEMA CONFIGURADO CORRECTAMENTE."
-  echo "  - Usuario: $USER_NAME  |  Hostname: $HOSTNAME"
-  echo "  - Puedes quitar la imagen ISO y reiniciar."
-  echo "  - Herramientas extras (tema Firefox estilo HTB, snapshot de respaldo, etc.):"
-  echo "      * Tema HackTheBox para YouTube (extension Stylus):"
-  echo "        https://github.com/hekatonkheirex/youtube/raw/main/hackthebox.user.css"
-  echo "      * Si picom-git falla visualmente, instala una version estable:"
-  echo "        sudo pacman -U picom-git-<version-estable>-x86_64.pkg.tar.zst"
-  ht_sep
+  if [[ "$INSTALL_PENTEST" == "S" ]]; then
+    nueva_etapa "HERRAMIENTAS DE PENTESTING" "$(arte_pentest)"
+    PASO_TOT=1
+    paso "Instalar herramientas de pentest" ch_pentest
+  fi
+
+  nueva_etapa "CIERRE"
+  PASO_TOT=4
+  paso "Retirar permisos temporales"  ch_quitar_nopasswd
+  paso "Permisos de archivos"        ch_permisos
+  paso "Indice de archivos"          ch_indice
+  paso "Registro de la instalacion"  ch_log
+
+  ch_resumen
+  registrar "=== FIN FASE CHROOT ==="
 }
 
-# ──────────────────────────────────────────────────────────────────────────
-#  MAIN
-# ──────────────────────────────────────────────────────────────────────────
-main() {
-  banner
-
-  # Pasar a fase chroot cuando se invoca con el argumento "chroot"
-  if [[ "${1:-}" == "chroot" ]]; then
-    fase_chroot
-    exit 0
-  fi
-
-  # Soporte para configuración precargada: ./Instalacion_Predatox --config archivo
-  local archivo_config=""
-  if [[ "${1:-}" == "--config" ]]; then
-    [[ -n "${2:-}" ]] || die "Falta la ruta del archivo de configuracion."
-    archivo_config="$2"
-  fi
-
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE ISO (punto de entrada desde el live USB)
+# ────────────────────────────────────────────────────────────────────────────
+fase_iso() {
+  # Se comprueba root antes de pintar nada: si falta, se avisa y se sale.
   check_root
-  check_internet
+  banner
+  LOG_FILE="/tmp/instalacion_predatox.log"
+  : > "$LOG_FILE" 2>/dev/null || true
+  registrar "=== INICIO FASE ISO ==="
 
-  if [[ -n "$archivo_config" ]]; then
-    leer_config "$archivo_config"
-    aplicar_valores_automaticos
-    [[ -n "${HOSTNAME:-}" ]] || HOSTNAME="$(hostname 2>/dev/null || echo Predatox)"
+  # 1) Comprobaciones basicas
+  info "Comprobando conexion a internet..."
+  if curl -fsS --max-time 10 https://archlinux.org >/dev/null 2>&1; then
+    ok "Conexion a internet disponible."
+  elif ping -c 2 -W 3 1.1.1.1 >/dev/null 2>&1; then
+    warn "No responde HTTPS, pero hay red. Se continuara."
   else
-    colectar_config
+    die "Sin conexion a internet: no se puede instalar ni descargar la personalizacion."
   fi
 
-  setup_teclado_hora
-  particionar
-  formatear_montar
-  instalar_base
-  iniciar_chroot
+  # 2) Preguntas: solo 4
+  if [[ -n "${CONFIG_PRECARGADA:-}" ]]; then
+    leer_config "$CONFIG_PRECARGADA"
+  else
+    info "Se preguntaran solo 4 datos: usuario, equipo y las dos contrasenas."
+    preguntar_usuario
+    preguntar_hostname
+    preguntar_contrasena ROOT_PASS root
+    preguntar_contrasena USER_PASS "$USER_NAME"
+  fi
 
-  ht_sep
-  ok "Instalacion de Arch Linux terminada."
-  echo "  Cuando apagues la maquina:"
-  echo "    - Desmonta el ISO de instalacion."
-  echo "    - Crea un SNAPSHOT de respaldo del sistema base."
-  read -rp "¿Reiniciar ahora? [s/N]: " resp
-  if [[ "${resp,,}" =~ ^(s|si|yes|y)$ ]]; then
-    umount -R /mnt 2>/dev/null || true
-    swapoff -a 2>/dev/null || true
+  # Si las contrasenas vienen del archivo de configuracion se cifran aqui.
+  if [[ -z "${ROOT_PASS_HASH:-}" && -n "${ROOT_PASS:-}" ]]; then
+    ROOT_PASS_HASH="$(hash_contrasena "$ROOT_PASS")" || die "No se pudo cifrar la contrasena de root."
+  fi
+  if [[ -z "${USER_PASS_HASH:-}" && -n "${USER_PASS:-}" ]]; then
+    USER_PASS_HASH="$(hash_contrasena "$USER_PASS")" || die "No se pudo cifrar la contrasena de $USER_NAME."
+  fi
+  [[ -n "${ROOT_PASS_HASH:-}" ]] || die "Falta la contrasena de root."
+  [[ -n "${USER_PASS_HASH:-}" ]] || die "Falta la contrasena de $USER_NAME."
+
+  # 3) Valores automaticos y resumen (sin confirmacion)
+  aplicar_valores_automaticos
+  resumen_config
+
+  ETAPA_ACTUAL=0
+  ETAPA_TOTAL=5
+
+  nueva_etapa "PREPARACION DEL ENTORNO" "$(arte_primer)"
+  PASO_TOT=3
+  paso "Cargar distribucion del teclado ($KEYMAP)" paso_teclado
+  paso "Zona horaria ($TIMEZONE)"                paso_hora
+  paso "Deteccion del disco de destino"          paso_detectar_disco
+
+  nueva_etapa "PARTICIONADO DEL DISCO"
+  PASO_TOT=2
+  paso "Crear la tabla de particiones ($BOOT_MODE)" paso_tabla_particiones
+  paso "Verificar las particiones"                  paso_esperar_particiones
+
+  nueva_etapa "FORMATEO Y MONTAJE"
+  PASO_TOT=2
+  paso "Formatear particiones"          paso_formatear
+  paso "Montar en /mnt y activar swap"  paso_montar
+
+  nueva_etapa "INSTALACION DEL SISTEMA BASE"
+  PASO_TOT=2
+  paso "Paquetes base con pacstrap" paso_pacstrap
+  paso "Generar fstab"             paso_fstab
+
+  nueva_etapa "CONFIGURACION DENTRO DE CHROOT"
+  PASO_TOT=2
+  paso "Copiar script y configuracion"    paso_copiar_script
+  paso "Ejecutar la configuracion del sistema" paso_entrar_chroot
+
+  # Cierre de la fase ISO
+  separador
+  sync
+  umount -R /mnt 2>/dev/null || true
+  swapoff -a 2>/dev/null || true
+  echo -e "${C_VERDE}[OK]${C_RESET} Instalacion terminada correctamente."
+
+  if [[ "$AUTO_REBOOT" == "S" ]]; then
+    echo "Reiniciando en 10 segundos (Ctrl+C para cancelar y apagar manualmente)..."
+    sleep 10
     reboot
   else
-    info "Puedes reiniciar manualmente cuando lo decidas."
+    info "AUTO_REBOOT=N: apaga la maquina, retira la ISO y enciende de nuevo."
   fi
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  MAIN
+# ────────────────────────────────────────────────────────────────────────────
+ayuda() {
+  cat <<'EOF'
+Instalacion_Predatox · instalador automatizado de Arch Linux
+
+  ./Instalacion_Predatox                      instala preguntando 4 datos
+  ./Instalacion_Predatox --config ARCHIVO     instala con configuracion precargada
+  ./Instalacion_Predatox --help               muestra esta ayuda
+
+Variables que se pueden fijar en el archivo de configuracion:
+  DISK=/dev/nvme0n1   BOOT_SIZE=1G   SWAP_SIZE=5G   FREE_SIZE=0G
+  KEYMAP=es  LANG_CFG=es_MX.UTF-8  XKBLAYOUT=latam  TIMEZONE=America/Mexico_City
+  BOOT_MODE=UEFI|BIOS  VIRTUALIZER=vmware|virtualbox|ninguna
+  INSTALL_GUI=S|N  INSTALL_PARU=S|N  INSTALL_BLACKARCH=S|N  INSTALL_PENTEST=S|N
+  STATIC_IP=S|N  IFACE=  IPV4=  PREFIX=  GATEWAY=  DNS=
+  AUTO_REBOOT=S|N
+  ROOT_PASS=  USER_PASS=      (si se usan, el script los cifra en SHA-512)
+EOF
+}
+
+main() {
+  case "${1:-}" in
+    --help|-h) ayuda; exit 0 ;;
+  esac
+
+  if [[ "${1:-}" == "chroot" ]]; then
+    fase_chroot
+    exit $?
+  fi
+
+  if [[ "${1:-}" == "--config" ]]; then
+    [[ -n "${2:-}" ]] || die "Falta la ruta del archivo de configuracion."
+    CONFIG_PRECARGADA="$2"
+  fi
+
+  fase_iso
 }
 
 main "$@"
