@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+# _ _  _ ____ ____ ____ _  _ ____ ___ _ ____ _  _    ____ ___  ____ _  _ ___    ___  ____ ____ _  _ ___ ____ ___     ____ _  _ _  _ _ ____ ____ _  _ _  _ ____ _  _ ___ 
+# | |\ | |___ |  | |__/ |\/| |__|  |  | |  | |\ |    |__| |__] |  | |  |  |     |  \ |___ [__  |_/   |  |  | |__]    |___ |\ | |  | | |__/ |  | |\ | |\/| |___ |\ |  |  
+# | | \| |    |__| |  \ |  | |  |  |  | |__| | \|    |  | |__] |__| |__|  |     |__/ |___ ___] | \_  |  |__| |       |___ | \|  \/  | |  \ |__| | \| |  | |___ | \|  |  
+
+
+user="${USER}"
+distro=$(. /etc/os-release ; echo "$PRETTY_NAME")
+name=$(uname -n)
+shell="$(basename ${SHELL})"
+wm="$(xprop -id $(xprop -root -notype | awk '$1=="_NET_SUPPORTING_WM_CHECK:"{print $5}') -notype -f _NET_WM_NAME 8t | grep "WM_NAME" | cut -f2 -d \")"
+kernel="$(uname -r | cut -d '-' -f1)"
+uptime="$(uptime -p | sed 's/up //')"
+terminal_name=$(echo $TERM)
+terminal=$(echo "$terminal_name" | grep -oP '(?<=xterm-)\w+')
+if [ -z "$terminal" ]; then
+    terminal="$terminal_name"
+fi
+ip=$(nmcli con show 'Ethernet' | grep 'ipv4.address' | awk '{print $2}')
+
+white='\033[37m'
+bold='\033[1m'
+end='\033[0m'
+
+printf '%b' "
+ ${bold}${white} ░▒▓██████████▓▒░  ${end}   ${bold}Welcome ${user}${end}
+ ${bold}${white} ░▒▓███████████▓▒░ ${end}  
+ ${bold}${white} ░▒▓██▓▒░  ░▒▓█▓▒░ ${end}   ${bold}OS:${end}		${distro} ${name}
+ ${bold}${white} ░▒▓██▓▒░  ░▒▓█▓▒░ ${end}   ${bold}Shell:${end}		${shell}
+ ${bold}${white} ░▒▓███████████▓▒░ ${end}   ${bold}GUI:${end}		${wm}
+ ${bold}${white} ░▒▓██████████▓▒░  ${end}   ${bold}Kernel:${end}		${kernel}
+ ${bold}${white} ░▒▓███▓▒░         ${end}   ${bold}Uptime:${end}		${uptime}
+ ${bold}${white} ░▒▓███▓▒░         ${end}   ${bold}Terminal:${end}	${terminal}
+ ${bold}${white} ░▒▓███▓▒░         ${end}   ${bold}IPv4:${end}		${ip}
+"

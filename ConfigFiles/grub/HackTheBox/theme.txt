@@ -1,0 +1,63 @@
+# Global properties
+title-text: "HTB Grub Theme"
+desktop-image: "background.png"
+desktop-color: "#000000"
+terminal-font: "2"
+terminal-box: "terminal_box_*.png"
+terminal-left: "0"
+terminal-top: "0"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
+# Boot menu
++ boot_menu {
+  left = 2%
+  top = 20%
+  width = 35%
+  height = 35%
+  item_font = "5"
+  item_color = "#BFFFCF"
+  selected_item_color = "#86C900"
+  icon_width = 35
+  icon_height = 35
+  item_height = 35
+  item_spacing = 10
+  item_padding = 10
+  item_icon_space = 10
+  item_pixmap_style = "item_*.png"
+  selected_item_pixmap_style = "selected_item_*.png"
+}
+
+# Countdown message
++ label {
+  left = 0
+  top = 60%
+  width = 100%
+  align = "center"
+  id = "__timeout__"
+  font = "2"
+  color = "#BBFF34"
+  # English
+  # text = "Automatic start in %d seconds."
+  # Español
+  text = "Inicio automático dentro de %d segundos."
+  # Russian
+  # text = "Автоматический запуск в течение %d секунды."
+}
+
+# Navigation keys hint 
++ label {
+  left = 0
+  top = 96%
+  width = 100%
+  align = "center"
+  color = "#BFFFCF"
+  font = "2"
+  # English
+  # text = "Use ↑ or ↓ to change selection, press ENTER to confirm."
+  # Español
+  text = "Use ↑ o ↓ para seleccionar, presiona ENTER para confirmar."
+  # Russian
+  # text = "Используйте ↑ или ↓ для выбора, ENTER для подтверждения."
+}
