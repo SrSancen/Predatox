@@ -91,6 +91,7 @@ LOG_FILE="/tmp/instalacion_predatox.log"
 
 # Comportamiento (todo configurable desde el archivo de configuracion).
 AUTO_REBOOT="${AUTO_REBOOT:-S}"             # S = reinicia al terminar
+RAIZ_MONTADA="${RAIZ_MONTADA:-/mnt}"         # punto donde se monta el sistema nuevo
 BOOT_SIZE="${BOOT_SIZE:-1G}"                # particion de arranque (/boot o FAT)
 SWAP_SIZE="${SWAP_SIZE:-5G}"                # particion de intercambio
 FREE_SIZE="${FREE_SIZE:-0G}"                # espacio sin particionar (0 = usar todo)
@@ -485,9 +486,20 @@ parsear_tamano() { # <1G|500M|2048> -> MiB
   esac
 }
 
-particion_n() { # <disco> <numero> -> /dev/nvme0n1p1 | /dev/sda1
-  local disco="$1" num="$2"
-  if [[ "$disco" == *nvme* ]]; then echo "${disco}p${num}"; else echo "${disco}${num}"; fi
+particion_n() { # <disco> <numero> -> /dev/nvme0n1p1 | /dev/sda1 | /dev/mmcblk0p1
+  local disco="$1" num="$2" cand
+  # Si el kernel ya ve las particiones, se le preguntan a el: es la unica
+  # forma fiable de acertar con nombres como mmcblk0p1, nvme0n1p1, loop0p1...
+  for cand in "${disco}p${num}" "${disco}${num}"; do
+    if [[ -e "$cand" ]]; then printf '%s\n' "$cand"; return 0; fi
+  done
+  # Todavia no existen (se acaba de crear la tabla), asi que se decide por el
+  # patron: nvme, mmcblk, loop, md y nbd llevan "p" antes del numero;
+  # sda, vda, hda y xvd no.
+  case "$disco" in
+    *nvme*|*mmcblk*|*loop*|*/md[0-9]*|*/nbd*|*/dm-*) printf '%sp%s\n' "$disco" "$num" ;;
+    *) printf '%s%s\n' "$disco" "$num" ;;
+  esac
 }
 
 elegir_wallpaper() { # <directorio> [prefijo]
@@ -766,7 +778,7 @@ paso_tabla_particiones() {
   fi
   info "Tabla $BOOT_MODE en $DISK: arranque ${boot_mib} MiB · root $(( root_end - boot_end )) MiB · swap ${swap_mib} MiB"
 
-  umount -R /mnt 2>/dev/null || true
+  umount -R "$RAIZ_MONTADA" 2>/dev/null || true
   swapoff -a 2>/dev/null || true
   wipefs -a "$DISK" >/dev/null 2>&1 || true
 
@@ -795,35 +807,192 @@ paso_esperar_particiones() {
   done
   partprobe "$DISK" 2>/dev/null || true
   sleep 2
-  lsblk -p "$DISK" | sed 's/^/       /'
+  lsblk -p "$DISK" 2>/dev/null | sed 's/^/       /' || true
 }
 
 # ────────────────────────────────────────────────────────────────────────────
 #  FASE ISO · ETAPA 3/5 · FORMATEO Y MONTAJE (sin confirmacion)
 # ────────────────────────────────────────────────────────────────────────────
-paso_formatear() {
-  local p1 p2 p3
-  p1="$(particion_n "$DISK" 1)"; p2="$(particion_n "$DISK" 2)"; p3="$(particion_n "$DISK" 3)"
-  info "Formateando $p1, $p2 y $p3..."
-  if [[ "$BOOT_MODE" == "UEFI" ]]; then
-    mkfs.fat -F32 "$p1" >/dev/null || die "No se pudo formatear $p1"
-  else
-    mkfs.ext4 -F -q "$p1" >/dev/null || die "No se pudo formatear $p1"
+
+# El script usa herramientas de varios paquetes. Si falta alguna, el fallo
+# aparece mas tarde y como "no se pudo formatear/montar", que no ayuda nada.
+# Aqui se comprueban todas y se instalan solas con pacman.
+comprobar_herramientas() {
+  local -A herramientas=(
+    [parted]=parted            [partprobe]=parted
+    [lsblk]=util-linux         [findmnt]=util-linux      [blkid]=util-linux
+    [mount]=util-linux         [umount]=util-linux      [swapon]=util-linux
+    [mkswap]=util-linux        [mkfs.ext4]=e2fsprogs    [mkfs.fat]=dosfstools
+    [genfstab]=filesystem      [pacstrap]=arch-install-scripts
+    [curl]=curl                [git]=git                [openssl]=openssl
+  )
+  local t p faltan=() paquetes=()
+  for t in "${!herramientas[@]}"; do
+    p="${herramientas[$t]}"
+    if ! command -v "$t" >/dev/null 2>&1; then
+      faltan+=("$t (paquete $p)")
+      case " ${paquetes[*]-} " in *" $p "*) ;; *) paquetes+=("$p") ;; esac
+    fi
+  done
+  if ! command -v openssl >/dev/null 2>&1 && ! command -v python3 >/dev/null 2>&1; then
+    faltan+=("openssl o python3 (para cifrar las contrasenas)")
   fi
-  mkfs.ext4 -F -q "$p2" >/dev/null || die "No se pudo formatear $p2"
-  mkswap "$p3" >/dev/null || die "No se pudo crear el area de swap en $p3"
+  (( ${#faltan[@]} == 0 )) && { ok "Todas las herramientas necesarias estan presentes."; return 0; }
+  warn "Faltan herramientas: ${faltan[*]}"
+  if (( EUID == 0 )) && command -v pacman >/dev/null 2>&1 && (( ${#paquetes[@]} > 0 )); then
+    detalle "Se instalan automaticamente: ${paquetes[*]}"
+    if pacman -Sy --needed --noconfirm "${paquetes[@]}" >/dev/null 2>&1; then
+      ok "Herramientas instaladas. Se continue."
+      return 0
+    fi
+    detalle "pacman no pudo instalarlas (revisa la conexion a internet)."
+  fi
+  die "Faltan herramientas imprescindibles: ${faltan[*]}"
+}
+
+# Comprueba que el kernel ya "ve" el sistema de archivos recien creado. En
+# NVMe y USB la tabla de particiones tarda en releerse: si no, el montaje
+# falla con "wrong fs type" aunque el formateo si se haya hecho bien.
+esperar_fs() { # <dispositivo> <tipo> [intentos]
+  local dev="$1" tipo="$2" n="${3:-5}" i t=""
+  for (( i = 0; i < n; i++ )); do
+    t="$(blkid -o value -s TYPE "$dev" 2>/dev/null || true)"
+    if [[ "$t" == "$tipo" ]]; then printf '%s' "$t"; return 0; fi
+    partprobe "$dev" 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
+    blockdev --rereadpt "$dev" 2>/dev/null || true
+    sleep 1
+  done
+  printf '%s' "$t"
+  [[ "$t" == "$tipo" ]]
+}
+
+# Formatea una particion y comprueba que el kernel la reconoce con el tipo
+# pedido. Muestra el error real de mkfs en vez de un "no se pudo formatear".
+formatear() { # <dispositivo> <tipo mkfs> <tipo blkid> [etiqueta]
+  local dev="$1" mk="$2" tipo="$3" err="" visto="" est=0 reg
+  reg="$(mktemp)" || reg="/tmp/.predatox_mkfs.$$"
+  case "$mk" in
+    vfat)  mkfs.fat -F32 -n PREDATOX "$dev" >/dev/null 2>"$reg"; est=$? ;;
+    ext4)  mkfs.ext4 -F -q -L predatox "$dev" >/dev/null 2>"$reg"; est=$? ;;
+    swap)  mkswap -L predatoxswap "$dev" >/dev/null 2>"$reg"; est=$? ;;
+    *)     est=1; printf 'tipo de formateo desconocido: %s\n' "$mk" >"$reg" ;;
+  esac
+  err="$(cat "$reg" 2>/dev/null)"; rm -f "$reg"
+  # Un aviso de mkfs (p.ej. el de los clusters de FAT32) no es un fallo:
+  # solo el codigo de salida decide.
+  [[ -n "$err" ]] && detalle "mkfs dice: $err"
+  if (( est != 0 )); then
+    fail "No se pudo formatear $dev (${4:-$tipo})."
+    detalle "Estado del disco:"
+    lsblk -f "$dev" 2>/dev/null | sed 's/^/       /' || true
+    return 1
+  fi
+  visto="$(esperar_fs "$dev" "$tipo")"
+  if [[ "$visto" != "$tipo" ]]; then
+    warn "$dev sigue sin verse como $tipo (se ve como ${visto:-sin sistema de archivos})."
+    detalle "Se relee la tabla de particiones y se formatea otra vez..."
+    partprobe "$dev" 2>/dev/null || true
+    udevadm settle --timeout=5 2>/dev/null || true
+    case "$mk" in
+      vfat) mkfs.fat -F32 -n PREDATOX "$dev" >/dev/null 2>&1 || true ;;
+      ext4) mkfs.ext4 -F -q -L predatox "$dev" >/dev/null 2>&1 || true ;;
+      swap) mkswap -L predatoxswap "$dev" >/dev/null 2>&1 || true ;;
+    esac
+    visto="$(esperar_fs "$dev" "$tipo")"
+  fi
+  if [[ "$visto" != "$tipo" ]]; then
+    fail "$dev no se reconoce como $tipo. Revisa el estado del disco:"
+    lsblk -f "$dev" 2>/dev/null | sed 's/^/       /' || true
+    detalle "Si el disco es un NVMe o un USB, prueba a expulsarlo y volver a enchufarlo."
+    return 1
+  fi
+  ok "$dev formateada como $visto."
+  return 0
+}
+
+# Dispositivo montado EXACTAMENTE en esa ruta. Ojo: findmnt --target
+# resuelve al montaje que contiene la ruta (siempre hay uno, por ejemplo
+# /), asi que daria "ya montado" sin haber montado nada.
+montado_en() { # <ruta>
+  local p="$1" s=""
+  s="$(findmnt -rn -M "$p" -o SOURCE 2>/dev/null || true)"
+  if [[ -z "$s" ]]; then
+    s="$(awk -v p="$p" '$2==p {print $1; exit}' /proc/mounts 2>/dev/null || true)"
+  fi
+  printf '%s' "$s"
+}
+
+# Monta una particion mostrando el error real de mount y el estado del disco.
+# Si el punto ya tiene otra cosa montada (tmpfs de la ISO o un intento
+# anterior) la desmonta antes, para no instalar el sistema en la RAM.
+montar_particion() { # <dispositivo> <punto> [tipo de fs]
+  local dev="$1" punto="$2" tipo="${3:-}" err="" actual
+  mkdir -p "$punto" || { fail "No se pudo crear el punto de montaje $punto."; return 1; }
+  actual="$(montado_en "$punto")"
+  if [[ "$actual" == "$dev" ]]; then
+    detalle "$punto ya tiene montado $dev: se conserva."
+    return 0
+  fi
+  if [[ -n "$actual" ]]; then
+    detalle "$punto tenia $actual montado; se desmonta para poner $dev."
+    umount -R "$punto" 2>/dev/null || umount "$punto" 2>/dev/null || true
+  fi
+  if [[ -n "$tipo" ]]; then
+    err="$(mount -t "$tipo" "$dev" "$punto" 2>&1)" || true
+  else
+    err="$(mount "$dev" "$punto" 2>&1)" || true
+  fi
+  if [[ "$(montado_en "$punto")" != "$dev" ]]; then
+    fail "No se pudo montar $dev en $punto."
+    [[ -n "$err" ]] && detalle "mount dice: $err"
+    detalle "Estado de las particiones:"
+    lsblk -f "$dev" 2>/dev/null | sed 's/^/       /' || true
+    return 1
+  fi
+  ok "$dev montado en $punto."
+  return 0
+}
+
+paso_formatear() {
+  local p1 p2 p3 fs1
+  p1="$(particion_n "$DISK" 1)"; p2="$(particion_n "$DISK" 2)"; p3="$(particion_n "$DISK" 3)"
+  # En UEFI la particion de arranque tiene que ser FAT; en BIOS, ext4.
+  if [[ "$BOOT_MODE" == "UEFI" ]]; then fs1=vfat; else fs1=ext4; fi
+  info "Formateando $p1 ($fs1), $p2 (ext4) y $p3 (swap)..."
+  formatear "$p1" "$fs1" "$fs1" "arranque"   || die "Fallo al formatear la particion de arranque $p1."
+  formatear "$p2" ext4 ext4 "raiz"          || die "Fallo al formatear la particion raiz $p2."
+  formatear "$p3" swap swap "swap"           || die "Fallo al crear el area de swap en $p3."
   ok "Formateo completado."
 }
 
 paso_montar() {
-  local p1 p2 p3
+  local p1 p2 p3 fs1
   p1="$(particion_n "$DISK" 1)"; p2="$(particion_n "$DISK" 2)"; p3="$(particion_n "$DISK" 3)"
-  mkdir -p /mnt/boot
-  mount "$p2" /mnt || die "No se pudo montar $p2 en /mnt"
-  mount "$p1" /mnt/boot || die "No se pudo montar $p1 en /mnt/boot"
-  swapon "$p3" 2>/dev/null || warn "No se pudo activar el swap en $p3"
-  ok "Montajes listos en /mnt"
-  lsblk -p "$DISK" | sed 's/^/       /'
+  if [[ "$BOOT_MODE" == "UEFI" ]]; then fs1=vfat; else fs1=ext4; fi
+  # El orden importa: primero la raiz y despues /boot dentro de ella.
+  montar_particion "$p2" "$RAIZ_MONTADA" ext4 || die "Sin la particion raiz montada en $RAIZ_MONTADA no se puede seguir."
+  if ! montar_particion "$p1" "$RAIZ_MONTADA/boot" "$fs1"; then
+    # Si la particion de arranque se quedo sin sistema de archivos (un
+    # formateo a medias, una tabla vieja o un disco que cambio de tipo) se
+    # formatea de nuevo y se reintenta una vez antes de rendirse.
+    if [[ -z "$(blkid -o value -s TYPE "$p1" 2>/dev/null || true)" ]]; then
+      detalle "$p1 no tiene sistema de archivos: se formatea otra vez como $fs1."
+      formatear "$p1" "$fs1" "$fs1" "arranque" || true
+      montar_particion "$p1" "$RAIZ_MONTADA/boot" "$fs1" \
+        || die "Sin /boot montado no se puede instalar GRUB ni el kernel."
+    else
+      die "Sin /boot montado no se puede instalar GRUB ni el kernel."
+    fi
+  fi
+  if swapon "$p3" 2>/dev/null; then
+    ok "Swap activado en $p3."
+  else
+    warn "No se pudo activar el swap en $p3 (el aviso del kernel es: $(swapon "$p3" 2>&1 | tail -1))."
+    detalle "La instalacion continua igual; anade la linea a fstab luego si la necesitas."
+  fi
+  ok "Montajes listos en $RAIZ_MONTADA"
+  lsblk -p "$DISK" 2>/dev/null | sed 's/^/       /' || true
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -855,7 +1024,7 @@ paquetes_base() {
   esac
 
   info "Ejecutando pacstrap (puede tardar varios minutos)..."
-  pacstrap -K /mnt --noconfirm "${pkgs[@]}" \
+  pacstrap -K "$RAIZ_MONTADA" --noconfirm "${pkgs[@]}" \
     || die "Fallo pacstrap. Revisa el mensaje anterior (conexion a red o clave de firma)."
   ok "Sistema base instalado."
 }
@@ -863,9 +1032,9 @@ paquetes_base() {
 paso_pacstrap() { paquetes_base; }
 
 paso_fstab() {
-  genfstab -U /mnt > /mnt/etc/fstab || die "No se pudo generar el fstab"
+  genfstab -U "$RAIZ_MONTADA" > "$RAIZ_MONTADA/etc/fstab" || die "No se pudo generar el fstab"
   ok "fstab generado:"
-  sed 's/^/       /' /mnt/etc/fstab
+  sed 's/^/       /' "$RAIZ_MONTADA/etc/fstab"
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -881,7 +1050,7 @@ paso_copiar_script() {
     SELF="$tmp_script"
   fi
 
-  mkdir -p /mnt/root
+  mkdir -p "$RAIZ_MONTADA/root"
   install -m 0755 "$SELF" "$SCRIPT_TARGET" 2>/dev/null || true
   if [[ ! -s "$SCRIPT_TARGET" || "$(head -c2 "$SCRIPT_TARGET" 2>/dev/null)" != "#!" ]]; then
     warn "Copia incompleta; descargando el script directamente a /root..."
@@ -894,12 +1063,12 @@ paso_copiar_script() {
   [[ -s "$SCRIPT_TARGET" ]] || die "No se pudo dejar el script en $SCRIPT_TARGET"
   escribir_config "$CONFIG_TARGET"
   [[ -s "$CONFIG_TARGET" ]] || die "No se pudo escribir $CONFIG_TARGET"
-  ok "Script ($(wc -c < "$SCRIPT_TARGET") bytes) y configuracion listos dentro de /mnt"
+  ok "Script ($(wc -c < "$SCRIPT_TARGET") bytes) y configuracion listos dentro de $RAIZ_MONTADA"
 }
 
 paso_entrar_chroot() {
   info "Entrando al sistema instalado (esto puede tardar varios minutos)..."
-  arch-chroot /mnt /root/Instalacion_Predatox chroot || die "La fase chroot fallo."
+  arch-chroot "$RAIZ_MONTADA" /root/Instalacion_Predatox chroot || die "La fase chroot fallo."
 }
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -1603,6 +1772,7 @@ fase_iso() {
   registrar "=== INICIO FASE ISO ==="
 
   # 1) Comprobaciones basicas
+  comprobar_herramientas
   info "Comprobando conexion a internet..."
   if curl -fsS --max-time 10 https://archlinux.org >/dev/null 2>&1; then
     ok "Conexion a internet disponible."
@@ -1654,7 +1824,7 @@ fase_iso() {
   nueva_etapa "FORMATEO Y MONTAJE"
   PASO_TOT=2
   paso "Formatear particiones"          paso_formatear
-  paso "Montar en /mnt y activar swap"  paso_montar
+  paso "Montar el sistema en $RAIZ_MONTADA y activar swap" paso_montar
 
   nueva_etapa "INSTALACION DEL SISTEMA BASE"
   PASO_TOT=2
@@ -1669,7 +1839,7 @@ fase_iso() {
   # Cierre de la fase ISO
   separador
   sync
-  umount -R /mnt 2>/dev/null || true
+  umount -R "$RAIZ_MONTADA" 2>/dev/null || true
   swapoff -a 2>/dev/null || true
   echo -e "${C_VERDE}[OK]${C_RESET} Instalacion terminada correctamente."
 
