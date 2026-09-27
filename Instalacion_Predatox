@@ -1219,7 +1219,7 @@ ch_paquetes_gui() {
               xdotool xclip xsel maim brightnessctl redshift lm_sensors
               mpd mpc ncmpcpp playerctl ffmpeg bluez-utils nautilus ranger
               gnome-settings-daemon python-mutagen fontconfig
-              seatd libinput xorg-xdpyinfo xorg-xprop numlockx)
+              seatd libinput xorg-xdpyinfo xorg-xprop numlockx xorg-xrdb)
   pacman -S --needed --noconfirm "${pkgs[@]}" >/dev/null 2>&1 \
     || warn "Algunos paquetes graficos no se instalaron (revisar el log)."
   ok "Paquetes del entorno grafico instalados."
@@ -1238,6 +1238,111 @@ ch_awesome() {
   pacman -S --needed --noconfirm mpdris2 >/dev/null 2>&1 || true
   command -v awesome >/dev/null 2>&1 && ok "AwesomeWM disponible ($(awesome --version 2>/dev/null | head -n1))" \
     || warn "AwesomeWM no quedo instalado."
+}
+
+# ────────────────────────────────────────────────────────────────────────────
+#  FASE CHROOT · ENTORNO DE SESION (variables que awesome necesita)
+# ────────────────────────────────────────────────────────────────────────────
+# El rc.lua de Predatox concatena estas variables con "..":
+#     editor = terminal .. " -e " .. os.getenv("EDITOR")          (rc.lua)
+#     local todo_file_path = os.getenv("TODO_PATH")               (todo.lua)
+# Si no existen, os.getenv devuelve nil y awesome aborta al arrancar con
+# "attempt to concatenate a nil value", dejando al usuario sin escritorio.
+# En una consola interactiva tu shell las define solas al abrirla, pero en
+# una sesion grafica que abre LightDM no hay ningun shell que las defina.
+agregar_linea() { # <archivo> <linea exacta> -> 0 si ya estaba
+  local f="$1" linea="$2"
+  [[ -f "$f" ]] || : >"$f" 2>/dev/null || return 1
+  grep -qxF -- "$linea" "$f" 2>/dev/null && return 0
+  printf '\n%s\n' "$linea" >>"$f" 2>/dev/null || return 1
+  chown "$USER_NAME:$USER_NAME" "$f" 2>/dev/null || true
+  return 0
+}
+
+ch_entorno_sesion() {
+  # Ojo: en "local a=x b=$a" bash expande las dos palabras ANTES de ejecutar
+  # local, asi que b veria la "a" de fuera (y con set -u, aborta). Por eso la
+  # ruta se escribe con $USER_NAME directamente.
+  local H="/home/$USER_NAME" ed="nano" cand
+  for cand in nvim vim nano; do
+    if command -v "$cand" >/dev/null 2>&1; then ed="$cand"; break; fi
+  done
+  mkdir -p "$H/Documents"
+  touch "$H/Documents/todo" 2>/dev/null || true
+
+  # .xprofile y .profile los lee LightDM al abrir la sesion grafica.
+  agregar_linea "$H/.xprofile" "export EDITOR=$ed" || warn "No se pudo escribir $H/.xprofile"
+  agregar_linea "$H/.xprofile" "export TODO_PATH=$H/Documents/todo" || true
+  agregar_linea "$H/.profile"  "export EDITOR=$ed" || warn "No se pudo escribir $H/.profile"
+  agregar_linea "$H/.profile"  "export TODO_PATH=$H/Documents/todo" || true
+  # .zshrc para la terminal del usuario (se copia desde el repositorio).
+  if [[ -f "$H/.zshrc" ]]; then
+    agregar_linea "$H/.zshrc" "export EDITOR=$ed" || true
+    agregar_linea "$H/.zshrc" "export TODO_PATH=$H/Documents/todo" || true
+  fi
+  # /etc/environment lo lee PAM, asi que tambien cubre la sesion grafica.
+  # Se comprueba la escritura antes de redirigir: si el redireccionamiento
+  # falla, bash avisa por pantalla y el 2>/dev/null del comando no lo calla.
+  if [[ -w /etc/environment ]]; then
+    grep -qxF "EDITOR=$ed" /etc/environment 2>/dev/null \
+      || printf 'EDITOR=%s\n' "$ed" >>/etc/environment \
+      || warn "No se pudo añadir EDITOR a /etc/environment"
+    grep -qxF "TODO_PATH=$H/Documents/todo" /etc/environment 2>/dev/null \
+      || printf 'TODO_PATH=%s\n' "$H/Documents/todo" >>/etc/environment \
+      || warn "No se pudo añadir TODO_PATH a /etc/environment"
+    detalle "Tambien en /etc/environment, que es lo que lee PAM."
+  else
+    detalle "/etc/environment no es escribible: se deja como estaba."
+  fi
+  ok "Variables de sesion definidas: EDITOR=$ed, TODO_PATH=$H/Documents/todo"
+}
+
+# Parchea una copia instalada de la configuracion de awesome para que no
+# reviente si falta una variable. El arreglo de verdad va en el repositorio
+# (asi el rc.lua oficial no crashea nunca); esto deja la instalacion a prueba
+# de una version antigua del rc.lua mientras tanto.
+lua_esc()  { local s="$1"; s="${s//\\/\\\\}"; s="${s//./\\.}"; s="${s//^/\\^}"
+             s="${s//\$/\\\$}"; s="${s//\*/\\*}"; s="${s//\[/\\[}"; s="${s//\]/\\]}"
+             s="${s//|/\\|}"; s="${s//&/\\&}"; s="${s//+/\\+}"; printf '%s' "$s"; }
+lua_rep()  { local s="$1"; s="${s//\\/\\\\}"; s="${s//&/\\&}"; printf '%s' "$s"; }
+parche_lua() { # <archivo> <texto literal viejo> <reemplazo> <descripcion> -> 0 si se parcheo
+  local f="$1" viejo="$2" nuevo="$3" et="$4"
+  [[ -f "$f" ]] || return 1
+  # si ya esta el texto nuevo, no se parchea otra vez (el viejo sigue
+  # apareciendo dentro del nuevo y se anidarian parentesis sin parar)
+  grep -qF -- "$nuevo" "$f" 2>/dev/null && return 1
+  grep -qF -- "$viejo" "$f" 2>/dev/null || return 1
+  if sed -i "s|$(lua_esc "$viejo")|$(lua_rep "$nuevo")|" "$f" 2>/dev/null; then
+    chown "$USER_NAME:$USER_NAME" "$f" 2>/dev/null || true
+    detalle "$et protegido por si la variable no esta definida."
+    return 0
+  fi
+  warn "No se pudo parchear $f"
+  return 1
+}
+
+ch_awesome_arreglo() {
+  local A="/home/$USER_NAME/.config/awesome"
+  local n=0
+  # OJO con los parentesis: en lua ".." tiene mas precedencia que "or", asi que
+  #   x = "a" .. os.getenv("E") or "nano"
+  # sigue petando (concatena nil antes de llegar al "or"). Con parentesis:
+  #   x = "a" .. (os.getenv("E") or "nano")
+  # rc.lua: EDITOR
+  parche_lua "$A/rc.lua" 'os.getenv("EDITOR")' \
+    '(os.getenv("EDITOR") or "nano")' 'rc.lua (EDITOR)' && n=$((n+1))
+  # signal/todo.lua: TODO_PATH
+  parche_lua "$A/signal/todo.lua" 'os.getenv("TODO_PATH")' \
+    'os.getenv("TODO_PATH") or (os.getenv("HOME") .. "/Documents/todo")' 'todo.lua (TODO_PATH)' && n=$((n+1))
+  # signal/volume.lua: USER
+  parche_lua "$A/signal/volume.lua" 'os.getenv("USER")' \
+    '(os.getenv("USER") or os.getenv("LOGNAME") or "root")' 'volume.lua (USER)' && n=$((n+1))
+  if (( n > 0 )); then
+    ok "Awesome: $n archivo(s) protegido(s) contra variables sin definir."
+  else
+    detalle "Awesome: la configuracion instalada ya tolera variables sin definir."
+  fi
+  return 0
 }
 
 ch_teclado_x11() {
@@ -1721,6 +1826,8 @@ fase_chroot() {
     PASO_TOT=8
     paso "Descargar ${REPO_USUARIO}/${REPO_NOMBRE}"  ch_descargar_personalizacion
     paso "Copiar configuraciones al home"            ch_copiar_config
+    paso "Variables de la sesion (EDITOR, TODO_PATH)" ch_entorno_sesion
+    paso "Proteger rc.lua contra variables vacias"     ch_awesome_arreglo
     paso "Tema de GRUB"                              ch_tema_grub
     paso "Wallpapers (login, escritorio, GRUB)"      ch_wallpapers
     paso "Fuentes tipograficas"                      ch_fuentes
